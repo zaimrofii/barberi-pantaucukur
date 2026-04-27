@@ -1,0 +1,17 @@
+# Node.js
+node_modules/
+dist/
+.pnpm-store/
+
+# Python/Django
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+db.sqlite3
+
+# Docker
+.env (kecuali ada file .env.example)
+
+# OS
+.DS_Store

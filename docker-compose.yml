@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16
+    container_name: pantaucukur_db_container
+    environment:
+      POSTGRES_DB: pantaucukur_db
+      POSTGRES_USER: zaimrofii
+      POSTGRES_PASSWORD: 561561
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # Sesuai spek kamu, akses luar via 5433
+
+  backend:
+    build:
+      context: ./barberi-backend
+    container_name: pantaucukur_backend
+    volumes:
+      - ./barberi-backend/PantauCukur:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_NAME=pantaucukur_db
+      - DATABASE_USER=zaimrofii
+      - DATABASE_PASSWORD=561561
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - DEBUG=1
+      - DJANGO_SETTINGS_MODULE=PantauCukur.settings  # SESUAIKAN dengan nama folder projectmu
+    depends_on:
+      - db
+    command: >
+      sh -c "python3 manage.py migrate && 
+             daphne -b 0.0.0.0 -p 8000 PantauCukur.asgi:application"
+             
+  frontend:
+    build:
+      context: ./barberi-frontend  # <--- PASTIKAN INI BENAR
+      dockerfile: Dockerfile
+    container_name: pantaucukur_frontend
+    volumes:
+      - ./barberi-frontend/pantaucukur:/app/pantaucukur
+      - /app/pantaucukur/node_modules # Proteksi node_modules
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
