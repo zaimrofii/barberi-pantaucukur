@@ -22,9 +22,15 @@
       "real_time_layer": {
         "description": "WebSocket connection for live dashboard updates and status notifications",
         "protocol": "WebSocket over ASGI"
+      },
+      "redis_cache": {
+        "description": "In-memory cache for sharing camera frames between AI Engine and Django processes",
+        "purpose": "Frame sharing across isolated processes",
+        "key_used": "latest_frame (expires after 5 seconds)",
+        "expiry_mechanism": "setex with 5 second TTL"
       }
     },
-    "communication_flow": "AI Engine → Django REST API → Database → WebSocket → Frontend Dashboard"
+    "communication_flow": "AI Engine → Redis (frame cache) → Django REST API → Database → WebSocket → Frontend Dashboard"
   },
 
   "file_structure": {
@@ -230,6 +236,9 @@
     "network": {
       "requests": "2.33.1",
       "channels_redis": "4.3.0"
+    },
+    "redis": {
+      "redis": "5.2.1"
     },
     "database": {
       "SQLite3": "Default (can be swapped for PostgreSQL)"

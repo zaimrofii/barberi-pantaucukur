@@ -3,6 +3,7 @@ import cv2
 import time
 import signal
 import sys
+import redis
 from detector import BarberDetector
 from utils import load_config, save_config, draw_roi_event
 from network import PantauNetwork
@@ -22,6 +23,7 @@ if HEADLESS:
 
 # Global variable buat Django
 LATEST_FRAME = None
+REDIS_CLIENT = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
 RUNNING = True
 
 
@@ -127,7 +129,10 @@ def main():
             # ============================================================
             # SAVE LATEST FRAME (buat Django)
             # ============================================================
-            LATEST_FRAME = frame.copy()
+            # Compress frame to JPEG (reduce size)
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            # Store in Redis with 5-second expiry
+            REDIS_CLIENT.setex('latest_frame', 5, buffer.tobytes())
 
             frame_count += 1
 

@@ -7,9 +7,10 @@ from .models import BarberSession
 import json
 import cv2
 import base64
+import redis
 from .services.utils import load_config, save_config
 
-LATEST_FRAME = None
+REDIS_CLIENT = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
 
 @csrf_exempt
 def start_session(request):
@@ -120,12 +121,11 @@ def get_sessions_summary(request):
 @csrf_exempt
 def get_camera_frame(request):
     if request.method == 'GET':
-        global LATEST_FRAME
-        if LATEST_FRAME is None:
-            return JsonResponse({"status": "error", "message": "No frame available"}, status=503)
         try:
-            _, buffer = cv2.imencode('.jpg', LATEST_FRAME)
-            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+            frame_bytes = REDIS_CLIENT.get('latest_frame')
+            if frame_bytes is None:
+                return JsonResponse({"status": "error", "message": "No frame available"}, status=503)
+            frame_b64 = base64.b64encode(frame_bytes).decode('utf-8')
             rois = load_config()
             return JsonResponse({
                 "status": "success",
