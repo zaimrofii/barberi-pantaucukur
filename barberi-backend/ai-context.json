@@ -1,0 +1,280 @@
+{
+  "project": {
+    "name": "PantauCukur (Barberi Backend)",
+    "version": "1.0.0",
+    "description": "AI-powered barber shop occupancy detection and session management system with real-time WebSocket updates",
+    "type": "Django Backend + AI Computer Vision",
+    "main_technology": "Django 6.0.4 + YOLOv8 + OpenCV + Channels",
+    "repository": "barberi-backend"
+  },
+  
+  "architecture": {
+    "overview": "Monolithic Django application with integrated AI service for real-time chair occupancy detection and session management",
+    "components": {
+      "django_backend": {
+        "description": "Handles REST API endpoints, WebSocket connections, and database operations",
+        "frameworks": ["Django 6.0.4", "Django Channels 4.3.2", "Daphne 4.2.1"]
+      },
+      "ai_engine": {
+        "description": "Computer vision service using YOLOv8 for person detection and ROI-based occupancy tracking",
+        "libraries": ["Ultralytics YOLOv8", "OpenCV", "PyTorch"]
+      },
+      "real_time_layer": {
+        "description": "WebSocket connection for live dashboard updates and status notifications",
+        "protocol": "WebSocket over ASGI"
+      }
+    },
+    "communication_flow": "AI Engine → Django REST API → Database → WebSocket → Frontend Dashboard"
+  },
+
+  "file_structure": {
+    "root": "barberi-backend/PantauCukur/",
+    "core": {
+      "path": "core/",
+      "description": "Main application module",
+      "files": {
+        "models.py": {
+          "description": "Database models including BarberSession",
+          "key_classes": ["BarberSession"]
+        },
+        "views.py": {
+          "description": "API endpoints for session management and summary data",
+          "key_functions": ["start_session", "end_session", "get_sessions_summary", "get_current_summary_data"]
+        },
+        "consumers.py": {
+          "description": "WebSocket consumer for real-time updates",
+          "key_classes": ["ChatConsumer"]
+        },
+        "urls.py": {
+          "description": "URL routing for core application",
+          "endpoints": ["/api/session/start/", "/api/session/end/", "/api/session/summary/"]
+        },
+        "services/": {
+          "description": "AI and network services",
+          "files": {
+            "detector.py": {
+              "description": "YOLOv8-based person detector with occupancy tracking",
+              "key_classes": ["BarberDetector"]
+            },
+            "network.py": {
+              "description": "Network communication with Django backend",
+              "key_classes": ["PantauNetwork"]
+            },
+            "main.py": {
+              "description": "Main AI engine entry point",
+              "key_functions": ["main"]
+            },
+            "utils.py": {
+              "description": "Utility functions for ROI management and configuration",
+              "key_functions": ["load_config", "save_config", "draw_roi_event"]
+            },
+            "config.json": {
+              "description": "ROI (Region of Interest) configuration storage"
+            },
+            "requirements.txt": {
+              "description": "Python dependencies for AI engine"
+            }
+          }
+        }
+      }
+    },
+    "PantauCukur/": {
+      "path": "PantauCukur/",
+      "description": "Django project configuration",
+      "files": {
+        "settings.py": "Django settings with Channels and CORS configuration",
+        "asgi.py": "ASGI configuration for WebSocket support",
+        "urls.py": "Project-level URL configuration",
+        "wsgi.py": "WSGI configuration"
+      }
+    },
+    "manage.py": "Django management script"
+  },
+
+  "database_schema": {
+    "BarberSession": {
+      "fields": {
+        "id": "BigAutoField (primary key)",
+        "chair_number": "IntegerField - identifies which chair/station",
+        "start_time": "DateTimeField - session start timestamp (auto-set)",
+        "end_time": "DateTimeField - session end timestamp (nullable)",
+        "duration_seconds": "IntegerField - total duration in seconds",
+        "is_valid": "BooleanField - True if duration > threshold (16 seconds)"
+      },
+      "meta": {
+        "ordering": ["-start_time"]
+      }
+    }
+  },
+
+  "api_endpoints": {
+    "session_management": {
+      "POST /api/session/start/": {
+        "description": "Start a new session when person sits down",
+        "request": {"chair_id": "integer (1-n)"},
+        "response": {"status": "success/failure", "session_id": "integer", "message": "string"},
+        "side_effects": "Creates BarberSession record, triggers WebSocket update"
+      },
+      "POST /api/session/end/": {
+        "description": "End active session when person leaves",
+        "request": {"chair_id": "integer (1-n)"},
+        "response": {"status": "success/failure", "duration": "integer (seconds)", "is_valid": "boolean"},
+        "side_effects": "Updates BarberSession, triggers WebSocket update"
+      }
+    },
+    "summary": {
+      "GET /api/session/summary/": {
+        "description": "Get summarized session data",
+        "response": {
+          "summary": {"total_valid": "integer", "total_invalid": "integer"},
+          "valid_list": "[array of valid sessions (max 10)]",
+          "invalid_list": "[array of invalid sessions (max 10)]"
+        }
+      }
+    }
+  },
+
+  "websocket_connection": {
+    "endpoint": "ws://[host]/ws/test/",
+    "messages": {
+      "INITIAL_CONNECTION": {
+        "trigger": "On connection establishment",
+        "data": "Full summary data for dashboard initialization"
+      },
+      "STATUS_UPDATE": {
+        "trigger": "On any chair occupancy change",
+        "data": {
+          "type": "STATUS_UPDATE",
+          "chair_id": "integer",
+          "is_occupied": "boolean",
+          "message": "string",
+          "updated_summary": "Latest summary data"
+        }
+      }
+    }
+  },
+
+  "ai_engine_configuration": {
+    "model": "YOLOv8n (nano)",
+    "confidence_threshold": 0.5,
+    "occupancy_ratio": 0.4,
+    "anti_flickering": {
+      "threshold_frames": 5,
+      "description": "Requires 5 consecutive frames before status changes to prevent flickering"
+    },
+    "processing_skip_frames": 10,
+    "roi_config": "Stored in config.json with format [[x1,y1,x2,y2], ...]",
+    "roi_management": {
+      "create": "Left-click drag",
+      "delete": "Right-click on existing ROI",
+      "move": "Left-click drag existing ROI"
+    }
+  },
+
+  "key_workflows": {
+    "occupancy_detection": {
+      "steps": [
+        "AI Engine captures video frame from IP camera",
+        "YOLOv8 detects persons in frame",
+        "Detector compares person boxes with defined ROIs",
+        "Smoothing algorithm prevents flickering",
+        "Status change triggers API call to Django",
+        "Django updates database and broadcasts via WebSocket"
+      ]
+    },
+    "session_management": {
+      "start": [
+        "AI detects person occupying chair",
+        "POST /api/session/start/ called",
+        "New BarberSession record created",
+        "WebSocket broadcast sent to all connected clients"
+      ],
+      "end": [
+        "AI detects chair is empty",
+        "POST /api/session/end/ called",
+        "End timestamp and duration calculated",
+        "Session marked valid if duration > 16 seconds",
+        "WebSocket broadcast sent to all connected clients"
+      ]
+    }
+  },
+
+  "dependencies": {
+    "core_framework": {
+      "Django": "6.0.4",
+      "Django Channels": "4.3.2",
+      "Daphne": "4.2.1",
+      "django-cors-headers": "4.9.0"
+    },
+    "ai_computer_vision": {
+      "ultralytics": "8.4.37",
+      "opencv-python": "4.13.0.92",
+      "torch": "2.11.0",
+      "torchvision": "0.26.0"
+    },
+    "network": {
+      "requests": "2.33.1",
+      "channels_redis": "4.3.0"
+    },
+    "database": {
+      "SQLite3": "Default (can be swapped for PostgreSQL)"
+    }
+  },
+
+  "development_notes": {
+    "async_considerations": {
+      "description": "WebSocket consumer is async, database operations must use database_sync_to_async decorator",
+      "performance_concern": "Avoid sending full history; limit summary results to 10"
+    },
+    "ai_engine_notes": {
+      "performance": "AI processing runs every 10 frames to balance CPU usage",
+      "network_timeout": "API calls have 0.5s timeout to prevent AI engine freeze if Django server is down"
+    },
+    "future_improvements": [
+      "Convert main.py functions into a class-based App for multiple camera support",
+      "Implement ROI update/delete/move functionality",
+      "Add Redis channel layer for production scaling",
+      "Improve error handling and logging",
+      "Add authentication for API endpoints"
+    ]
+  },
+
+  "configuration_constants": {
+    "min_session_duration": 16,
+    "occupancy_threshold": 0.4,
+    "anti_flickering_frames": 5,
+    "ai_skip_frames": 10,
+    "network_timeout": 0.5,
+    "camera_url": "http://192.168.1.8:8080/video"
+  },
+
+  "testing": {
+    "http_testing": "core/test.http file with REST Client compatible requests",
+    "manual_testing": "Run AI engine with `python core/services/main.py`",
+    "django_testing": "Run `python manage.py runserver`"
+  },
+
+  "deployment_notes": {
+    "development": "Uses InMemoryChannelLayer (single process only)",
+    "production": "Must switch to Redis channel layer with `channels_redis`",
+    "environment": "ASGI server required (Daphne included)",
+    "settings": {
+      "DEBUG": "True (development)",
+      "CORS_ALLOW_ALL_ORIGINS": "True (development)",
+      "ALLOWED_HOSTS": "[] (development)"
+    }
+  },
+
+  "common_issues": {
+    "flickering": "Fixed with anti-flickering threshold system",
+    "network_failure": "AI engine continues running even if Django server is down",
+    "session_validation": "Sessions are only valid if duration > 16 seconds",
+    "websocket_initialization": "Client must handle INITIAL_CONNECTION and STATUS_UPDATE messages differently"
+  },
+
+  "frontend_integration": {
+    "websocket_messages": "Client should listen on ws://[host]/ws/test/",
+    "message_types": ["INITIAL_CONNECTION", "STATUS_UPDATE"],
+    "state_management": "Maintain local chair status state and update from WebSocket messages"
+  }
+}

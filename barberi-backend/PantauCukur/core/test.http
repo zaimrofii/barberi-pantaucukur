@@ -1,0 +1,54 @@
+### Variabel Konfigurasi
+@baseUrl = http://localhost:8000
+@contentType = application/json
+
+# ambil data summary
+### 6. Get  Sessions summary
+# Skenario: Melihat semua history pangkas yang tercatat
+GET {{baseUrl}}/api/session/summary/
+
+# ______________________________________________
+### 1. Test Start Session (Kursi 1 Mulai Pangkas)
+# Skenario: AI mendeteksi ada orang duduk di Kursi 1
+POST {{baseUrl}}/api/session/start/
+Content-Type: {{contentType}}
+
+{
+    "chair_id": 1
+}
+
+### 2. Test Start Session (Kursi 2 Mulai Pangkas)
+# Skenario: Pelanggan lain duduk di Kursi 2
+POST {{baseUrl}}/api/session/start/
+Content-Type: {{contentType}}
+
+{
+    "chair_id": 2
+}
+
+### 3. Test End Session (Kursi 1 Selesai)
+# Skenario: Orang di Kursi 1 berdiri setelah pangkas
+# Jalankan ini minimal 60 detik setelah 'Start' agar is_valid menjadi True
+POST {{baseUrl}}/api/session/end/
+Content-Type: {{contentType}}
+
+{
+    "chair_id": 1
+}
+
+### 4. Test End Session (Kursi 2 Selesai)
+POST {{baseUrl}}/api/session/end/
+Content-Type: {{contentType}}
+
+{
+    "chair_id": 2
+}
+
+### 5. Test Error Handling (End session tanpa Start)
+# Skenario: Mencoba mengakhiri sesi di kursi yang memang sedang kosong
+POST {{baseUrl}}/api/session/end/
+Content-Type: {{contentType}}
+
+{
+    "chair_id": 99
+}

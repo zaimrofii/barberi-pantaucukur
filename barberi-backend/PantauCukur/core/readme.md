@@ -1,0 +1,5 @@
+## consumer dan get_current_summary_data
+- Database Hit: Setiap kali ada orang bergerak di depan kamera (meskipun cuma lewat), kodemu akan melakukan count() dan filter() ke seluruh database. Kalau barbershop punya ribuan riwayat sesi, dashboard-mu akan terasa lambat (lag).
+- Saran: Gunakan [:10] (seperti yang saya tambahkan) untuk membatasi data yang dikirim ke WebSocket. Jangan kirim seluruh riwayat hidup barbershop lewat socket!
+- Concurrency: Karena kamu menggunakan AsyncWebsocketConsumer, kamu harus berhati-hati dengan database_sync_to_async. Jika banyak kursi berubah status bersamaan, antrean akses ke database bisa jadi bottleneck.
+- Frontend Logic: Pastikan di React/Frontend, kamu membedakan pesan INITIAL_CONNECTION dan STATUS_UPDATE. Jangan sampai setiap ada update kecil, seluruh komponen di-render ulang secara brutal.

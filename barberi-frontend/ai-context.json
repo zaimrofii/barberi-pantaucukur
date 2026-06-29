@@ -1,0 +1,411 @@
+{
+  "project": {
+    "name": "PantauCukur Frontend",
+    "version": "1.0.0",
+    "description": "Mobile-first dashboard for barber shop occupancy monitoring with real-time updates and analytics",
+    "type": "React Single Page Application",
+    "main_technology": "React 19 + Vite + Tailwind CSS 4",
+    "repository": "barberi-frontend"
+  },
+
+  "architecture": {
+    "overview": "Modern React SPA with mobile-first design, real-time WebSocket integration, and dark/light theme support",
+    "components": {
+      "ui_layer": {
+        "description": "Mobile-responsive dashboard with real-time chair status monitoring",
+        "frameworks": ["React 19", "React Router DOM 7", "Recharts 3"]
+      },
+      "real_time_client": {
+        "description": "WebSocket client for live updates from Django backend",
+        "protocol": "WebSocket over ws:// protocol"
+      },
+      "state_management": {
+        "description": "Local state management with React hooks and context",
+        "approach": "Component-level state with useEffect for data fetching"
+      },
+      "styling": {
+        "description": "Tailwind CSS with dark mode support and shadcn/ui components",
+        "frameworks": ["Tailwind CSS 4", "shadcn/ui", "Lucide React Icons"]
+      }
+    },
+    "communication_flow": "Frontend Dashboard ↔ WebSocket ↔ Django Backend ↔ AI Engine",
+    "deployment": "Static SPA served via Vite build"
+  },
+
+  "file_structure": {
+    "root": "barberi-frontend/pantaucukur/",
+    "src": {
+      "path": "src/",
+      "components": {
+        "lib/": {
+          "utils.js": "Utility functions including cn() for class merging, formatDuration(), normalizeSession()"
+        },
+        "services/": {
+          "api.js": "REST API service layer for backend communication"
+        },
+        "ui/": {
+          "input.jsx": "Shadcn Input component",
+          "select.jsx": "Shadcn Select component with Radix UI",
+          "sheet.jsx": "Shadcn Sheet/Drawer component",
+          "switch.jsx": "Shadcn Switch component with theme toggle",
+          "tabs.jsx": "Shadcn Tabs component",
+          "session-list.jsx": "Session list with tabs for valid/anomaly sessions"
+        },
+        "main.jsx": "Main dashboard layout component",
+        "bottom-navigation.jsx": "Bottom navigation bar with routing and settings sheet",
+        "chair-status-grid.jsx": "Chair status grid with real-time occupancy",
+        "dashboard-content.jsx": "Dashboard content with stats and widgets",
+        "mobile-header.jsx": "Mobile header with live indicator",
+        "session-history-container.jsx": "Session history container with WebSocket",
+        "theme-provider.jsx": "Theme provider wrapper for dark/light mode",
+        "barber-leaderboard.jsx": "Barber performance leaderboard",
+        "traffic-analytics-chart.jsx": "Traffic analytics chart using Recharts"
+      },
+      "pages/": {
+        "dashboard.jsx": "Dashboard page",
+        "analytic-page.jsx": "Analytics and insights page",
+        "session-history.jsx": "Session history page with filters"
+      },
+      "App.jsx": "Main App with routing configuration",
+      "main.jsx": "Application entry point with ThemeProvider",
+      "index.css": "Global styles with Tailwind and CSS variables",
+      "App.css": "Additional styles"
+    },
+    "public/": {
+      "favicon.svg": "Application favicon",
+      "icons.svg": "SVG sprite for icons"
+    },
+    "index.html": "HTML entry point",
+    "package.json": "Dependencies and scripts",
+    "vite.config.js": "Vite configuration with Tailwind plugin",
+    "components.json": "shadcn/ui configuration"
+  },
+
+  "page_structure": {
+    "dashboard": {
+      "route": "/",
+      "components": [
+        "MobileHeader",
+        "DashboardContent",
+        "ChairStatusGrid",
+        "SessionHistoryContainer",
+        "BottomNavigation"
+      ],
+      "features": [
+        "Real-time chair status",
+        "Active session timers",
+        "Daily statistics (customers, revenue)",
+        "Recent sessions preview"
+      ]
+    },
+    "analytics": {
+      "route": "/analytic-page",
+      "components": [
+        "MobileHeader",
+        "TrafficAnalyticsChart",
+        "BarberLeaderboard",
+        "BottomNavigation"
+      ],
+      "features": [
+        "Hourly traffic chart",
+        "Barber performance ranking",
+        "Daily metrics"
+      ]
+    },
+    "history": {
+      "route": "/history",
+      "components": [
+        "MobileHeader",
+        "SessionList",
+        "Search and filters",
+        "BottomNavigation"
+      ],
+      "features": [
+        "Full session history",
+        "Search by chair number",
+        "Date filtering (today/week/month)",
+        "Valid/Anomaly session tabs"
+      ]
+    }
+  },
+
+  "webSocket_connection": {
+    "endpoint": "ws://127.0.0.1:8000/ws/test/",
+    "client_implementations": [
+      "src/components/chair-status-grid.jsx",
+      "src/components/session-history-container.jsx"
+    ],
+    "message_handling": {
+      "INITIAL_CONNECTION": {
+        "description": "First message on connection establishment",
+        "handling": "Sets initial session data and summary"
+      },
+      "STATUS_UPDATE": {
+        "description": "Real-time status updates from backend",
+        "data": {
+          "type": "STATUS_UPDATE",
+          "chair_id": "integer",
+          "is_occupied": "boolean",
+          "message": "string",
+          "updated_summary": {
+            "summary": {"total_valid": "integer", "total_invalid": "integer"},
+            "valid_list": "[array]",
+            "invalid_list": "[array]"
+          }
+        },
+        "handling": "Updates chair status grid and session list"
+      }
+    },
+    "error_handling": "Socket close event logged to console with reconnect option"
+  },
+
+  "data_models": {
+    "session": {
+      "raw": {
+        "id": "integer",
+        "chair": "integer (chair number)",
+        "start": "string (ISO datetime)",
+        "duration": "integer (seconds)",
+        "status": "string ('VALID' or 'INVALID')"
+      },
+      "normalized": {
+        "id": "integer",
+        "chairId": "integer",
+        "chairName": "string (e.g., 'Kursi 01')",
+        "startTime": "string (formatted time)",
+        "duration": "integer",
+        "status": "string (lowercase)",
+        "anomalyReason": "string (if invalid)"
+      }
+    },
+    "chair": {
+      "id": "integer",
+      "name": "string",
+      "isOccupied": "boolean",
+      "startTime": "Date | null",
+      "progress": "integer (0-100)"
+    }
+  },
+
+  "api_integration": {
+    "base_url": "http://127.0.0.1:8000/api",
+    "endpoints": {
+      "GET /session/summary/": {
+        "description": "Fetch session summary on initial load",
+        "service": "sessionService.getSummary()",
+        "response": {
+          "summary": {"total_valid": "integer", "total_invalid": "integer"},
+          "valid_list": "[array of sessions]",
+          "invalid_list": "[array of sessions]"
+        },
+        "error_handling": "Console error logging, falls back to empty state"
+      }
+    }
+  },
+
+  "component_hierarchy": {
+    "App": {
+      "description": "Root component with Router",
+      "children": ["Dashboard", "AnalyticsPage", "SessionHistory"]
+    },
+    "Dashboard": {
+      "description": "Main monitoring view",
+      "children": [
+        "MobileHeader",
+        "DashboardContent",
+        "BottomNavigation"
+      ]
+    },
+    "DashboardContent": {
+      "description": "Dashboard content container",
+      "children": ["StatCards", "ChairStatusGrid", "SessionHistoryContainer"]
+    },
+    "ChairStatusGrid": {
+      "description": "Real-time chair status grid",
+      "state": ["chairs (array)", "WebSocket connection"],
+      "children": ["ChairCard (map)"]
+    },
+    "SessionHistoryContainer": {
+      "description": "Session history with WebSocket updates",
+      "state": ["sessions (valid/invalid)", "loading"],
+      "children": ["SessionList"]
+    },
+    "SessionList": {
+      "description": "Tabs for valid and anomaly sessions",
+      "children": ["Tabs", "SessionCard (map)"]
+    },
+    "BottomNavigation": {
+      "description": "Fixed bottom navigation",
+      "features": ["Navigation to dashboard/analytics/history", "Settings sheet"]
+    },
+    "SettingsSheet": {
+      "description": "Settings drawer from bottom",
+      "features": ["Dark/light mode toggle", "Profile settings", "Sign out"]
+    }
+  },
+
+  "utility_functions": {
+    "cn": {
+      "location": "src/components/lib/utils.js",
+      "description": "Merges Tailwind classes using clsx and tailwind-merge",
+      "signature": "cn(...inputs) => string"
+    },
+    "formatDuration": {
+      "location": "src/components/lib/utils.js",
+      "description": "Formats seconds into MM:SS format",
+      "signature": "formatDuration(seconds) => string"
+    },
+    "normalizeSession": {
+      "location": "src/components/lib/utils.js",
+      "description": "Normalizes raw session data for UI consumption",
+      "signature": "normalizeSession(session) => normalizedSession",
+      "transformations": [
+        "Converts 'chair' to 'chairId' as Number",
+        "Formats chairName as 'Kursi XX'",
+        "Formats startTime to HH:MM",
+        "Adds anomalyReason for invalid sessions (< 60s)"
+      ]
+    }
+  },
+
+  "styling_system": {
+    "framework": "Tailwind CSS 4 with @tailwindcss/vite",
+    "theme": {
+      "provider": "next-themes",
+      "default": "dark",
+      "modes": ["light", "dark"]
+    },
+    "css_variables": {
+      "light": {
+        "--background": "oklch(0.98 0 0)",
+        "--foreground": "oklch(0.15 0.02 250)",
+        "--card": "oklch(1 0 0)",
+        "--chair-occupied": "oklch(94.722% 0.06571 145.11)",
+        "--chair-vacant": "oklch(91.817% 0.00323 15.438)"
+      },
+      "dark": {
+        "--background": "oklch(0.12 0.005 260)",
+        "--foreground": "oklch(0.95 0 0)",
+        "--card": "oklch(0.16 0.008 260)",
+        "--chair-occupied": "oklch(0.18 0.04 40)",
+        "--chair-occupied-border": "oklch(0.65 0.18 45)",
+        "--chair-vacant": "oklch(0.15 0.02 250)",
+        "--chair-vacant-border": "oklch(0.55 0.15 220)"
+      }
+    },
+    "animations": {
+      "shimmer": "Gradient animation for active chair cards",
+      "pulse-live": "Pulsing animation for live indicator",
+      "ping": "Ping animation for notifications"
+    }
+  },
+
+  "dependencies": {
+    "core": {
+      "react": "19.2.4",
+      "react-dom": "19.2.4",
+      "react-router-dom": "7.14.0"
+    },
+    "ui": {
+      "shadcn": ["@radix-ui/react-*"],
+      "lucide-react": "1.8.0",
+      "recharts": "3.8.1"
+    },
+    "styling": {
+      "tailwindcss": "4.2.2",
+      "@tailwindcss/vite": "4.2.2",
+      "tailwind-merge": "3.5.0",
+      "clsx": "2.1.1"
+    },
+    "theming": {
+      "next-themes": "0.4.6"
+    },
+    "forms": {
+      "react-hook-form": "7.72.1",
+      "@hookform/resolvers": "5.2.2",
+      "zod": "4.3.6"
+    },
+    "build": {
+      "vite": "8.0.4",
+      "@vitejs/plugin-react": "6.0.1"
+    }
+  },
+
+  "development_notes": {
+    "websocket_management": {
+      "initialization": "Socket should be initialized with useEffect",
+      "cleanup": "Always close socket in useEffect cleanup function",
+      "multiple_connections": "Ensure only one socket connection per component"
+    },
+    "state_updates": {
+      "chair_status": "Update chair status from WebSocket STATUS_UPDATE messages",
+      "session_data": "Update session data from updated_summary field",
+      "local_timers": "Calculate elapsed time client-side with setInterval"
+    },
+    "performance": {
+      "memoization": "Use useMemo for filtered data",
+      "re-renders": "Minimize component re-renders with proper state management"
+    },
+    "mobile_first": {
+      "design": "All components designed mobile-first with responsive breakpoints",
+      "touch": "Active states with scale transforms for touch feedback",
+      "safe_areas": "safe-top and safe-bottom for notch support"
+    }
+  },
+
+  "common_issues": {
+    "websocket_connection": {
+      "issue": "Socket not connecting",
+      "solution": "Ensure backend server is running on port 8000, check CORS settings"
+    },
+    "dark_mode": {
+      "issue": "Theme not persisting",
+      "solution": "Set enableSystem: false in ThemeProvider if manual toggle needed"
+    },
+    "session_data": {
+      "issue": "No session data showing",
+      "solution": "Check API endpoint availability, verify session has valid data (duration > 16s)"
+    },
+    "realtime_update": {
+      "issue": "Chair status not updating",
+      "solution": "Ensure backend AI engine is sending updates, check WebSocket message format"
+    }
+  },
+
+  "frontend_backend_integration": {
+    "websocket_messages": {
+      "expected_format": {
+        "type": "INITIAL_CONNECTION | STATUS_UPDATE",
+        "chair_id": "integer (1-n)",
+        "is_occupied": "boolean",
+        "message": "string",
+        "updated_summary": "object (session summary data)"
+      }
+    },
+    "data_flow": {
+      "occupancy_change": "AI Engine → Django → WebSocket → Frontend",
+      "session_creation": "AI Engine detects person → Django creates session → WebSocket update",
+      "session_validation": "Django validates duration > 16s → marks session valid/invalid"
+    },
+    "chair_mapping": {
+      "frontend_id": "1-based chair numbers matching backend",
+      "display": "'Kursi XX' format",
+      "status": "Occupied/Vacant based on isOccupied flag"
+    }
+  },
+
+  "testing_notes": {
+    "manual_testing": [
+      "Run backend on port 8000",
+      "Run frontend with `npm run dev`",
+      "Test chair status changes from AI engine",
+      "Verify WebSocket updates in dashboard and history",
+      "Test dark/light mode toggle",
+      "Test navigation between pages"
+    ],
+    "environment": {
+      "backend_url": "http://127.0.0.1:8000",
+      "websocket_url": "ws://127.0.0.1:8000/ws/test/"
+    }
+  }
+}
