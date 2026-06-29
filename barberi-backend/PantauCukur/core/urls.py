@@ -5,4 +5,6 @@ urlpatterns = [
     path('session/start/', views.start_session, name='start_session'),
     path('session/end/', views.end_session, name='end_session'),
     path('session/summary/', views.get_sessions_summary, name='get_all_sessions'),
+    path('camera/frame/', views.get_camera_frame, name='get_camera_frame'),
+    path('roi/update/', views.update_roi, name='update_roi'),
 ]

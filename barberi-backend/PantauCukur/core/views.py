@@ -5,6 +5,11 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from .models import BarberSession
 import json
+import cv2
+import base64
+from .services.utils import load_config, save_config
+
+LATEST_FRAME = None
 
 @csrf_exempt
 def start_session(request):
@@ -111,3 +116,39 @@ def get_sessions_summary(request):
     if request.method == 'GET':
         data = get_current_summary_data()
         return JsonResponse(data)
+
+@csrf_exempt
+def get_camera_frame(request):
+    if request.method == 'GET':
+        global LATEST_FRAME
+        if LATEST_FRAME is None:
+            return JsonResponse({"status": "error", "message": "No frame available"}, status=503)
+        try:
+            _, buffer = cv2.imencode('.jpg', LATEST_FRAME)
+            frame_b64 = base64.b64encode(buffer).decode('utf-8')
+            rois = load_config()
+            return JsonResponse({
+                "status": "success",
+                "frame": frame_b64,
+                "rois": rois
+            })
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+@csrf_exempt
+def update_roi(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            rois = data.get('rois', [])
+            # Validasi format ROI
+            for roi in rois:
+                if not isinstance(roi, list) or len(roi) != 4:
+                    raise ValueError("Each ROI must be a list of 4 integers")
+                for coord in roi:
+                    if not isinstance(coord, (int, float)):
+                        raise ValueError("Each coordinate must be a number")
+            save_config(rois)
+            return JsonResponse({"status": "success", "message": "ROIs updated"})
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=400)

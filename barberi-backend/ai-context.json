@@ -131,6 +131,21 @@
           "invalid_list": "[array of invalid sessions (max 10)]"
         }
       }
+    },
+    "roi_management": {
+      "GET /api/camera/frame/": {
+        "description": "Get latest camera frame as base64 JPEG with current ROIs",
+        "response": {
+          "status": "success/failure",
+          "frame": "base64 encoded JPEG string",
+          "rois": "array of ROI coordinates"
+        }
+      },
+      "POST /api/roi/update/": {
+        "description": "Update ROI configuration",
+        "request": {"rois": "array of [x1,y1,x2,y2] arrays"},
+        "response": {"status": "success/failure", "message": "string"}
+      }
     }
   },
 

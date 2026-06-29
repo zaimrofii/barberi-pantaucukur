@@ -4,8 +4,10 @@ from detector import BarberDetector
 from utils import load_config, save_config, draw_roi_event
 from network import PantauNetwork
 
+LATEST_FRAME = None
 
 def main():
+    global LATEST_FRAME
     print("\n" + "=" * 40)
     print("      PANTAUCUKUR AI ENGINE v1.0      ")
     print("=" * 40)
@@ -49,6 +51,8 @@ def main():
             print("[WARN] Frame kosong atau stream terputus. Mencoba ulang...")
             time.sleep(0.1)
             continue
+
+        LATEST_FRAME = frame.copy()
 
         frame_count += 1
 
