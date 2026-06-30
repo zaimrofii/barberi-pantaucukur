@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, BarChart3, Clock, Cog, Moon, Sun, User, LogOut } from "lucide-react";
+import { Home, BarChart3, Clock, Cog, Moon, Sun, User, LogOut, Pencil } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Link, useLocation } from "react-router-dom"; // Tambahkan ini
 import { cn } from "./lib/utils"; 
@@ -74,6 +74,21 @@ function SettingsSheet() {
             <div className="flex flex-col">
               <span className="text-sm font-medium">Laba AI Account</span>
               <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-tighter">Manage your agency profile</span>
+            </div>
+          </button>
+
+          {/* ROI Editor */}
+          <button
+            onClick={() => {
+              // Navigate to ROI editor
+              window.location.href = "/roi-editor";
+            }}
+            className="flex items-center gap-3 p-4 rounded-2xl bg-secondary/30 border border-white/5 text-left transition-all active:scale-[0.98]"
+          >
+            <Pencil className="w-5 h-5 text-muted-foreground" />
+            <div className="flex flex-col">
+              <span className="text-sm font-medium">Atur ROI</span>
+              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-tighter">Edit region of interest</span>
             </div>
           </button>
 

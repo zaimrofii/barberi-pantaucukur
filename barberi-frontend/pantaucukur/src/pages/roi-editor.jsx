@@ -24,13 +24,15 @@ export default function ROLEditor() {
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/camera/frame/`);
+      
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      
       if (data.status !== "success") throw new Error(data.message || "Unknown error");
       setFrame(data.frame);
       setRois(data.rois || []);
-      setImageLoaded(false);
     } catch (err) {
+      console.error("🔴 [FRONTEND] Error:", err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -39,54 +41,74 @@ export default function ROLEditor() {
 
   useEffect(() => {
     fetchFrame();
-  }, [fetchFrame]);
+  }, []);
 
-  // Draw canvas when frame or rois change
+  // ============================================================
+  // 1. DRAW BACKGROUND (hanya saat frame berubah)
+  // ============================================================
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !frame) return;
+    
     const ctx = canvas.getContext("2d");
     const img = new Image();
+    
     img.onload = () => {
-      // Set canvas size to image natural size
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       ctx.drawImage(img, 0, 0);
       setImageLoaded(true);
-      drawRois(ctx, rois);
     };
+    
+    img.onerror = (e) => {
+      console.error("🔴 [DRAW BG] Image load error:", e);
+    };
+    
     img.src = `data:image/jpeg;base64,${frame}`;
-  }, [frame, rois]);
+  }, [frame]);
 
-  const drawRois = (ctx, roisList, preview = null) => {
-    if (!ctx) return;
-    // Redraw image first
+  // ============================================================
+  // 2. DRAW ROI OVERLAY (saat rois berubah atau imageLoaded)
+  // ============================================================
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !imageLoaded || !frame) return;
+
+    const ctx = canvas.getContext("2d");
+    
+    // Redraw background
     const img = new Image();
     img.onload = () => {
       ctx.drawImage(img, 0, 0);
+      
       // Draw existing ROIs
-      roisList.forEach((roi, idx) => {
-        const [x1, y1, x2, y2] = roi;
-        const x = Math.min(x1, x2);
-        const y = Math.min(y1, y2);
-        const w = Math.abs(x2 - x1);
-        const h = Math.abs(y2 - y1);
-        ctx.fillStyle = "rgba(34, 197, 94, 0.2)";
-        ctx.fillRect(x, y, w, h);
-        ctx.strokeStyle = "rgba(34, 197, 94, 0.8)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, w, h);
-        ctx.fillStyle = "rgba(34, 197, 94, 0.9)";
-        ctx.font = "bold 14px sans-serif";
-        ctx.fillText(`Kursi ${idx + 1}`, x + 4, y + 16);
-      });
-      // Draw preview rectangle while dragging
-      if (preview) {
-        const { start, current } = preview;
-        const x = Math.min(start.x, current.x);
-        const y = Math.min(start.y, current.y);
-        const w = Math.abs(current.x - start.x);
-        const h = Math.abs(current.y - start.y);
+      if (rois && rois.length > 0) {
+        rois.forEach((roi, idx) => {
+          const [x1, y1, x2, y2] = roi;
+          const x = Math.min(x1, x2);
+          const y = Math.min(y1, y2);
+          const w = Math.abs(x2 - x1);
+          const h = Math.abs(y2 - y1);
+          
+          ctx.fillStyle = "rgba(34, 197, 94, 0.2)";
+          ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = "rgba(34, 197, 94, 0.8)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x, y, w, h);
+          ctx.fillStyle = "rgba(34, 197, 94, 0.9)";
+          ctx.font = "bold 26px  sans-serif";
+          ctx.textBaseline = "top";
+          ctx.fillText(`Kursi ${idx + 1}`, x + 24, y + 16);
+        });
+      }
+      
+      // Draw preview if dragging
+      if (isDrawing && startPoint && currentPoint) {
+        const x = Math.min(startPoint.x, currentPoint.x);
+        const y = Math.min(startPoint.y, currentPoint.y);
+        const w = Math.abs(currentPoint.x - startPoint.x);
+        const h = Math.abs(currentPoint.y - startPoint.y);
+        
         ctx.fillStyle = "rgba(59, 130, 246, 0.2)";
         ctx.fillRect(x, y, w, h);
         ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
@@ -96,8 +118,13 @@ export default function ROLEditor() {
         ctx.setLineDash([]);
       }
     };
+    
+    img.onerror = (e) => {
+      console.error("🔴 [DRAW ROI] Image error:", e);
+    };
+    
     img.src = `data:image/jpeg;base64,${frame}`;
-  };
+  }, [rois, imageLoaded, isDrawing, startPoint, currentPoint]);
 
   // Mouse handlers
   const getCanvasCoords = (e) => {
@@ -113,7 +140,7 @@ export default function ROLEditor() {
   };
 
   const handleMouseDown = (e) => {
-    if (!imageLoaded) return;
+    if (!imageLoaded) return;  
     const coords = getCanvasCoords(e);
     setIsDrawing(true);
     setStartPoint(coords);
@@ -124,37 +151,47 @@ export default function ROLEditor() {
     if (!isDrawing) return;
     const coords = getCanvasCoords(e);
     setCurrentPoint(coords);
-    // Redraw with preview
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    drawRois(ctx, rois, { start: startPoint, current: coords });
   };
+  
+  const justDraggedRef = useRef(false);
 
   const handleMouseUp = (e) => {
     if (!isDrawing) return;
     setIsDrawing(false);
     const endPoint = getCanvasCoords(e);
+
     const x1 = Math.round(Math.min(startPoint.x, endPoint.x));
     const y1 = Math.round(Math.min(startPoint.y, endPoint.y));
     const x2 = Math.round(Math.max(startPoint.x, endPoint.x));
     const y2 = Math.round(Math.max(startPoint.y, endPoint.y));
-    // Ignore very small rectangles
+
     if (Math.abs(x2 - x1) < 10 || Math.abs(y2 - y1) < 10) {
-      // Redraw without preview
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        drawRois(ctx, rois);
-      }
-      return;
+      setStartPoint(null);
+      setCurrentPoint(null);
+      return; // ini click biasa (gerakan kecil), biarkan handleCanvasClick yang urus
     }
+
+    // Ini valid drag → tandai supaya click yang menyusul tidak menghapusnya
+    justDraggedRef.current = true;
+
     const newRoi = [x1, y1, x2, y2];
-    const updatedRois = [...rois, newRoi];
-    setRois(updatedRois);
+    setRois(prev => [...prev, newRoi]);
+
     setStartPoint(null);
     setCurrentPoint(null);
   };
+
+const handleCanvasClick = (e) => {
+  // Abaikan click yang merupakan ekor dari drag barusan
+  if (justDraggedRef.current) {
+    justDraggedRef.current = false;
+    return;
+  }
+  if (isDrawing) return;
+  if (rois.length === 0) return;
+  const updated = rois.slice(0, -1);
+  setRois(updated);
+};
 
   // Save ROIs
   const handleSave = async () => {
@@ -172,29 +209,14 @@ export default function ROLEditor() {
         alert("Gagal menyimpan: " + (data.message || "Unknown error"));
       }
     } catch (err) {
+      console.error("🔴 [SAVE] Error:", err);
       alert("Gagal menyimpan: " + err.message);
     } finally {
       setSaving(false);
     }
   };
 
-  // Delete ROI by clicking on existing rectangle (simple approach: delete last)
-  const handleCanvasClick = (e) => {
-    if (isDrawing) return;
-    if (rois.length === 0) return;
-    // Delete the last ROI for simplicity
-    const updated = rois.slice(0, -1);
-    setRois(updated);
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
-        <Loader2 className="w-8 h-8 animate-spin text-orange-400" />
-      </div>
-    );
-  }
-
+ 
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-background p-4">
@@ -241,7 +263,7 @@ export default function ROLEditor() {
       </header>
 
       {/* Instructions */}
-      <div className="px-4 py-2 text-xs text-muted-foreground">
+      <div className="px-4 py-2 text-xs md:text-sm text-muted-foreground">
         Klik dan seret pada gambar untuk membuat ROI. Klik pada ROI yang ada untuk menghapus ROI terakhir.
       </div>
 
@@ -258,11 +280,8 @@ export default function ROLEditor() {
             onMouseLeave={() => {
               if (isDrawing) {
                 setIsDrawing(false);
-                const canvas = canvasRef.current;
-                if (canvas) {
-                  const ctx = canvas.getContext("2d");
-                  drawRois(ctx, rois);
-                }
+                setStartPoint(null);
+                setCurrentPoint(null);
               }
             }}
             onClick={handleCanvasClick}
@@ -278,7 +297,7 @@ export default function ROLEditor() {
       {/* ROI List */}
       <div className="px-4 py-3 border-t border-white/10">
         <h2 className="text-sm font-semibold mb-2">Daftar ROI ({rois.length})</h2>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 md:pb-12">
           {rois.map((roi, idx) => (
             <span
               key={idx}

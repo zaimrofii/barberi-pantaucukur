@@ -23,7 +23,7 @@ if HEADLESS:
 
 # Global variable buat Django
 LATEST_FRAME = None
-REDIS_CLIENT = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
+REDIS_CLIENT = redis.Redis(host="localhost", port=6379, db=0, decode_responses=False)
 RUNNING = True
 
 
@@ -130,10 +130,10 @@ def main():
             # SAVE LATEST FRAME (buat Django)
             # ============================================================
             # Compress frame to JPEG (reduce size)
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            # Store in Redis with 5-second expiry
-            REDIS_CLIENT.setex('latest_frame', 5, buffer.tobytes())
+            _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
 
+            # Store in Redis with 5-second expiry
+            REDIS_CLIENT.setex("latest_frame", 5, buffer.tobytes())
             frame_count += 1
 
             # ============================================================
@@ -197,7 +197,7 @@ def main():
                     print("[SUCCESS] Konfigurasi dibersihkan.")
             else:
                 # Headless: kasih tau masih hidup
-                if frame_count % 100 == 0:
+                if frame_count % 500 == 0:
                     print(f"[HEARTBEAT] Running... {frame_count} frames processed")
 
         except Exception as e:
