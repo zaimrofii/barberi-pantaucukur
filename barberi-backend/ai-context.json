@@ -4,7 +4,7 @@
     "version": "1.0.0",
     "description": "AI-powered barber shop occupancy detection and session management system with real-time WebSocket updates",
     "type": "Django Backend + AI Computer Vision",
-    "main_technology": "Django 6.0.4 + YOLOv8 + OpenCV + Channels",
+    "main_technology": "Django 6.0.4 + YOLOv8-Pose + OpenCV + Channels",
     "repository": "barberi-backend"
   },
   
@@ -16,7 +16,7 @@
         "frameworks": ["Django 6.0.4", "Django Channels 4.3.2", "Daphne 4.2.1"]
       },
       "ai_engine": {
-        "description": "Computer vision service using YOLOv8 for person detection and ROI-based occupancy tracking",
+        "description": "Computer vision service using YOLOv8-Pose for person detection, keypoint estimation, and ROI-based occupancy tracking",
         "libraries": ["Ultralytics YOLOv8", "OpenCV", "PyTorch"]
       },
       "real_time_layer": {
@@ -59,7 +59,7 @@
           "description": "AI and network services",
           "files": {
             "detector.py": {
-              "description": "YOLOv8-based person detector with occupancy tracking",
+              "description": "YOLOv8-Pose based person detector with multi-person keypoint estimation and occupancy tracking",
               "key_classes": ["BarberDetector"]
             },
             "network.py": {
@@ -176,14 +176,14 @@
   },
 
   "ai_engine_configuration": {
-    "model": "YOLOv8n (nano)",
+    "model": "YOLOv8n-Pose (nano pose)",
     "confidence_threshold": 0.5,
+    "keypoint_conf_threshold": 0.3,
     "occupancy_ratio": 0.4,
     "anti_flickering": {
       "threshold_frames": 5,
       "description": "Requires 5 consecutive frames before status changes to prevent flickering"
     },
-    "processing_skip_frames": 10,
     "roi_config": "Stored in config.json with format [[x1,y1,x2,y2], ...]",
     "roi_management": {
       "create": "Left-click drag",
@@ -196,7 +196,7 @@
     "occupancy_detection": {
       "steps": [
         "AI Engine captures video frame from IP camera",
-        "YOLOv8 detects persons in frame",
+        "YOLOv8-Pose detects persons and keypoints in frame",
         "Detector compares person boxes with defined ROIs",
         "Smoothing algorithm prevents flickering",
         "Status change triggers API call to Django",
@@ -251,7 +251,7 @@
       "performance_concern": "Avoid sending full history; limit summary results to 10"
     },
     "ai_engine_notes": {
-      "performance": "AI processing runs every 10 frames to balance CPU usage",
+      "performance": "AI processing runs every frame (no skip) since YOLO-Pose provides both detection and keypoints in a single inference",
       "network_timeout": "API calls have 0.5s timeout to prevent AI engine freeze if Django server is down"
     },
     "future_improvements": [
@@ -267,7 +267,7 @@
     "min_session_duration": 16,
     "occupancy_threshold": 0.4,
     "anti_flickering_frames": 5,
-    "ai_skip_frames": 10,
+    "keypoint_conf_threshold": 0.3,
     "network_timeout": 0.5,
     "camera_url": "http://192.168.1.8:8080/video"
   },
