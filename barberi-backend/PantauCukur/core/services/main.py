@@ -26,6 +26,10 @@ LATEST_FRAME = None
 REDIS_CLIENT = redis.Redis(host="localhost", port=6379, db=0, decode_responses=False)
 RUNNING = True
 
+# Konfigurasi heartbeat
+HEARTBEAT_INTERVAL_FRAMES = int(os.environ.get("HEARTBEAT_INTERVAL_FRAMES", "900"))  # 30 detik pada 30fps
+SESSION_UPDATE_INTERVAL = int(os.environ.get("SESSION_UPDATE_INTERVAL", "5"))  # frame
+
 
 def signal_handler(sig, frame):
     """Graceful shutdown kalo di Ctrl+C"""
@@ -64,6 +68,7 @@ def main():
 
     last_status = [False] * len(CHAIR_CONFIG)
     last_boxes = []
+    last_session_data = {}  # Simpan session_data terakhir untuk heartbeat
 
     # ============================================================
     # SETUP WINDOW (Cuma kalau tidak headless)
@@ -140,7 +145,14 @@ def main():
             # AI PROCESSING (Skip beberapa frame biar ringan)
             # ============================================================
             if frame_count % SKIP_FRAMES == 0:
-                new_status, last_boxes = detector.process_ai(frame)
+                # Gunakan USE_SCORING untuk menentukan apakah session_data dikembalikan
+                use_scoring = os.environ.get("USE_SCORING", "false").lower() == "true"
+                
+                if use_scoring:
+                    new_status, last_boxes, session_data = detector.process_ai(frame)
+                else:
+                    new_status, last_boxes = detector.process_ai(frame)
+                    session_data = {}
 
                 # Sinkronisasi jumlah list
                 while len(last_status) < len(new_status):
@@ -150,17 +162,51 @@ def main():
                 # NETWORK & STATE MONITORING - Kirim perubahan ke Django
                 # ============================================================
                 for i in range(len(new_status)):
+                    chair_id = i + 1  # 1-indexed untuk API
+                    
+                    # 1. Kirim status occupancy (binary) jika berubah
                     if i < len(last_status) and new_status[i] != last_status[i]:
                         status_str = "TERISI" if new_status[i] else "KOSONG"
-                        print(f"[EVENT] Perubahan Status - Kursi {i+1}: {status_str}")
+                        print(f"[EVENT] Perubahan Status - Kursi {chair_id}: {status_str}")
 
-                        # Kirim ke Django
-                        success = network.report_status_change(i + 1, new_status[i])
+                        # Kirim ke Django (binary occupancy)
+                        success = network.report_status_change(chair_id, new_status[i])
                         if not success:
-                            print(f"[WARN] Gagal kirim status kursi {i+1} ke server")
+                            print(f"[WARN] Gagal kirim status kursi {chair_id} ke server")
 
                         # Update memori
                         last_status[i] = new_status[i]
+                    
+                    # 2. Kirim session update jika ada perubahan status state machine
+                    if use_scoring and session_data and i in session_data:
+                        sd = session_data[i]
+                        if sd.get('status_changed', False):
+                            print(f"[EVENT] State Machine - Kursi {chair_id}: {sd['session_status']} (score={sd['confidence_score']})")
+                            
+                            # Kirim session update ke Django
+                            success = network.report_session_update(
+                                chair_id=chair_id,
+                                is_active=sd['is_active'],
+                                confidence_score=sd['confidence_score'],
+                                session_status=sd['session_status']
+                            )
+                            if not success:
+                                print(f"[WARN] Gagal kirim session update kursi {chair_id} ke server")
+                        
+                        # Simpan session_data terakhir untuk heartbeat
+                        last_session_data[i] = sd
+                
+                # 3. Heartbeat: kirim keepalive ke Django secara periodik
+                if use_scoring and frame_count % HEARTBEAT_INTERVAL_FRAMES == 0:
+                    for i in range(len(new_status)):
+                        if i in last_session_data:
+                            sd = last_session_data[i]
+                            network.send_heartbeat(
+                                chair_id=i + 1,
+                                is_active=sd.get('is_active', False),
+                                confidence_score=sd.get('confidence_score', 0),
+                                session_status=sd.get('session_status', 'IDLE')
+                            )
 
             # ============================================================
             # UI DRAWING

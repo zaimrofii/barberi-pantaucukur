@@ -19,9 +19,15 @@ def start_session(request):
         try:
             data = json.loads(request.body)
             chair_id = data.get("chair_id")
+            confidence_score = data.get("confidence_score", 0)
+            session_status = data.get("session_status", "PENDING")
 
             # 1. Logika Database
-            session = BarberSession.objects.create(chair_number=chair_id)
+            session = BarberSession.objects.create(
+                chair_number=chair_id,
+                confidence_score=confidence_score,
+                session_status=session_status,
+            )
 
             # 2. Logika Real-time (Kirim ke Broker/Redis)
             channel_layer = get_channel_layer()
@@ -32,6 +38,8 @@ def start_session(request):
                     "message": f"Kursi {chair_id} mulai terisi",
                     "chair_id": chair_id,
                     "is_occupied": True,
+                    "confidence_score": confidence_score,
+                    "session_status": session_status,
                 },
             )
 
@@ -52,6 +60,9 @@ def end_session(request):
         try:
             data = json.loads(request.body)
             chair_id = data.get("chair_id")
+            confidence_score = data.get("confidence_score", 0)
+            session_status = data.get("session_status", "ENDED")
+            timeout_reason = data.get("timeout_reason", None)
 
             # 1. Cari sesi aktif
             session = BarberSession.objects.filter(
@@ -68,9 +79,15 @@ def end_session(request):
                 if session.duration_seconds > 16:  # Pastikan angka ini realistis nanti
                     session.is_valid = True
 
+                # 4. Update scoring fields
+                session.confidence_score = confidence_score
+                session.session_status = session_status
+                if timeout_reason:
+                    session.timeout_reason = timeout_reason
+
                 session.save()
 
-                # 4. Kirim notifikasi real-time bahwa kursi sekarang KOSONG
+                # 5. Kirim notifikasi real-time bahwa kursi sekarang KOSONG
                 channel_layer = get_channel_layer()
                 async_to_sync(channel_layer.group_send)(
                     "pantau_cukur_events",
@@ -79,6 +96,8 @@ def end_session(request):
                         "message": f"Kursi {chair_id} selesai. Durasi: {session.duration_seconds}s",
                         "chair_id": chair_id,
                         "is_occupied": False,
+                        "confidence_score": confidence_score,
+                        "session_status": session_status,
                     },
                 )
 
@@ -87,12 +106,106 @@ def end_session(request):
                         "status": "success",
                         "duration": session.duration_seconds,
                         "is_valid": session.is_valid,
+                        "confidence_score": confidence_score,
+                        "session_status": session_status,
                     }
                 )
 
             return JsonResponse(
                 {"status": "error", "message": "No active session found"}, status=404
             )
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+
+@csrf_exempt
+def update_session(request):
+    """Endpoint untuk update sesi dari state machine (PENDING, ACTIVE, ENDING)"""
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            chair_id = data.get("chair_id")
+            is_active = data.get("is_active", False)
+            confidence_score = data.get("confidence_score", 0)
+            session_status = data.get("session_status", "PENDING")
+            timeout_reason = data.get("timeout_reason", None)
+
+            # Cari sesi aktif
+            session = BarberSession.objects.filter(
+                chair_number=chair_id, end_time__isnull=True
+            ).last()
+
+            if session:
+                # Update scoring fields
+                session.confidence_score = confidence_score
+                session.session_status = session_status
+                if timeout_reason:
+                    session.timeout_reason = timeout_reason
+                session.save()
+
+                # Kirim notifikasi real-time
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    "pantau_cukur_events",
+                    {
+                        "type": "send_status_update",
+                        "message": f"Kursi {chair_id} status: {session_status} (score={confidence_score})",
+                        "chair_id": chair_id,
+                        "is_occupied": is_active,
+                        "confidence_score": confidence_score,
+                        "session_status": session_status,
+                    },
+                )
+
+                return JsonResponse(
+                    {
+                        "status": "success",
+                        "session_id": session.id,
+                        "message": f"Session updated: {session_status}",
+                    }
+                )
+            else:
+                # Jika tidak ada sesi aktif, buat baru
+                session = BarberSession.objects.create(
+                    chair_number=chair_id,
+                    confidence_score=confidence_score,
+                    session_status=session_status,
+                )
+                return JsonResponse(
+                    {
+                        "status": "success",
+                        "session_id": session.id,
+                        "message": f"New session created: {session_status}",
+                    }
+                )
+
+        except Exception as e:
+            return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+
+@csrf_exempt
+def heartbeat(request):
+    """Endpoint untuk heartbeat dari AI Engine"""
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            chair_id = data.get("chair_id")
+            is_active = data.get("is_active", False)
+            confidence_score = data.get("confidence_score", 0)
+            session_status = data.get("session_status", "IDLE")
+
+            # Update last_heartbeat untuk sesi aktif
+            session = BarberSession.objects.filter(
+                chair_number=chair_id, end_time__isnull=True
+            ).last()
+
+            if session:
+                session.last_heartbeat = timezone.now()
+                session.confidence_score = confidence_score
+                session.session_status = session_status
+                session.save()
+
+            return JsonResponse({"status": "success"})
         except Exception as e:
             return JsonResponse({"status": "error", "message": str(e)}, status=400)
 
@@ -122,6 +235,8 @@ def serialize_session(s):
         "start": s.start_time.isoformat(),
         "duration": s.duration_seconds,
         "status": "VALID" if s.is_valid else "INVALID",
+        "confidence_score": s.confidence_score,
+        "session_status": s.session_status,
     }
 
 

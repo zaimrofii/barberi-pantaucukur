@@ -22,6 +22,21 @@ class BarberSession(models.Model):
         default="PENDING",
         help_text="State machine status",
     )
+    last_heartbeat = models.DateTimeField(
+        null=True, blank=True, help_text="Timestamp of last heartbeat from AI Engine"
+    )
+    timeout_reason = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Reason for session timeout (e.g., AI_CRASH, NETWORK_LOSS)",
+    )
+    ended_by = models.CharField(
+        max_length=20,
+        choices=[("AI", "AI Engine"), ("TIMEOUT", "Timeout"), ("MANUAL", "Manual")],
+        default="AI",
+        help_text="How the session was ended",
+    )
 
     class Meta:
         ordering = ["-start_time"]
