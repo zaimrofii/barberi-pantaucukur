@@ -173,45 +173,83 @@
             
                 return occupancy_ratio > 0.4  # Ubah angka ini (0.1 - 0.9) sesuai selera sensitivitasmu
 
-            def classify_posture(self, kpts, frame_height=None):
-                """Mengklasifikasikan seseorang sebagai DUDUK atau BERDIRI berdasarkan hubungan bahu-pinggul.
+            def _calculate_area_ratio(self, bbox):
+                """Calculate width/height ratio of person bounding box."""
+                width = bbox[2] - bbox[0]
+                height = bbox[3] - bbox[1]
+                return width / height if height > 0 else 0
+
+            def _get_consistent_posture(self, track_id):
+                """Get posture that has been consistent across last N frames."""
+                if track_id not in self.posture_history:
+                    return None
+                recent = self.posture_history[track_id][-self.sitting_temporal_window:]
+                if len(recent) < self.sitting_min_consistent_frames:
+                    return None
+                sitting_count = sum(1 for p in recent if p == 'SITTING')
+                standing_count = len(recent) - sitting_count
+                if sitting_count > standing_count * 2:
+                    return 'SITTING'
+                elif standing_count > sitting_count * 2:
+                    return 'STANDING'
+                return None
+
+            def classify_posture(self, kpts, bbox=None, roi=None, frame_height=None):
+                """Mengklasifikasikan seseorang sebagai DUDUK atau BERDIRI berdasarkan beberapa sinyal.
 
                     Argumen:
                     kpts: array numpy dengan bentuk (17, 3) di mana setiap baris adalah [x, y, kepercayaan]
+                    bbox: bounding box [x1, y1, x2, y2] untuk area ratio
+                    roi: region of interest [x1, y1, x2, y2] untuk deteksi kursi
                     frame_height: tinggi frame untuk normalisasi (opsional)
                     Mengembalikan:
-                    str: 'DUDUK' atau 'BERDIRI'
+                    str: 'SITTING' atau 'STANDING'
                 
                 """
                 if kpts is None or len(kpts) < 13:
                     return 'STANDING'
             
+                votes = 0  # votes for SITTING
                 
+                # Signal 1: Area ratio method
+                if bbox is not None:
+                    ratio = self._calculate_area_ratio(bbox)
+                    if ratio > self.sitting_area_ratio_threshold:
+                        votes += 1
+                
+                # Signal 2: Temporal consistency (requires track_id)
+                # We'll handle this outside by passing track_id via _get_consistent_posture
+                # For now, we rely on the caller to provide track_id via a separate mechanism
+                
+                # Signal 3: Keypoint-based shoulder-hip distance (existing logic)
                 try:
-                    # Check confidence for required keypoints
                     if (kpts[LEFT_SHOULDER][2] < self.keypoint_conf_threshold or
                         kpts[RIGHT_SHOULDER][2] < self.keypoint_conf_threshold or
                         kpts[LEFT_HIP][2] < self.keypoint_conf_threshold or
                         kpts[RIGHT_HIP][2] < self.keypoint_conf_threshold):
+                        # If keypoints unreliable, rely on area ratio only
+                        if votes >= 1:
+                            return 'SITTING'
                         return 'STANDING'
                     
-                    # Get y coordinates (pixel values)
                     shoulder_y = (kpts[LEFT_SHOULDER][1] + kpts[RIGHT_SHOULDER][1]) / 2
                     hip_y = (kpts[LEFT_HIP][1] + kpts[RIGHT_HIP][1]) / 2
                     
-                    # Normalize by frame height if available
                     if frame_height and frame_height > 0:
                         vertical_diff = (hip_y - shoulder_y) / frame_height
                     else:
                         vertical_diff = hip_y - shoulder_y
                     
-                    # Ambang batas: jika jarak vertikal antara bahu dan pinggul kecil (< 0,15 dari tinggi gambar), duduk 
                     if vertical_diff < 0.15:
-                        return 'SITTING'
-                    else:
-                        return 'STANDING'
+                        votes += 1
                 except Exception:
-                    return 'STANDING'  # fallback
+                    pass
+                
+                # Decision: return SITTING if votes >= 2
+                if votes >= 2:
+                    return 'SITTING'
+                else:
+                    return 'STANDING'
                     
             def calculate_hand_activity(self, kpts, prev_kpts=None, frame_height=None):
                 """Hitung poin aktivitas tangan untuk frame saat ini.
@@ -443,6 +481,25 @@
                     'person_count': person_count_score
                 }
 
+            def cleanup_inactive_tracks(self):
+                """Remove track data that hasn't been seen for > timeout frames."""
+                current_frame = self.frame_count
+                to_remove = []
+                
+                for track_id, last_seen in self.track_last_seen.items():
+                    if current_frame - last_seen > self.track_timeout:
+                        to_remove.append(track_id)
+                
+                for track_id in to_remove:
+                    # Remove from all dictionaries
+                    self.trajectories.pop(track_id, None)
+                    self.posture_history.pop(track_id, None)
+                    self.hand_activity.pop(track_id, None)
+                    self._prev_keypoints.pop(track_id, None)
+                    self.track_last_seen.pop(track_id, None)
+                
+                return len(to_remove)
+
             def _compute_iou(self, box1, box2):
                 """Compute Intersection over Union between two bounding boxes.
                 
@@ -543,12 +600,27 @@
                         self.trajectories[track_id] = []
                     self.trajectories[track_id].append(centroid)
                     
+                    # Update last seen frame
+                    self.track_last_seen[track_id] = self.frame_count
+                    
                     # Ambil keypoints untuk track spesifik ini
                     kpts = keypoints_per_track.get(track_id)
                     
                     if kpts is not None:
-                        # Klasifikasikan postur
-                        posture = self.classify_posture(kpts, frame_height)
+                        # Determine which ROI this track belongs to (for chair detection)
+                        chair_roi = None
+                        for i, roi in enumerate(self.rois):
+                            if (roi[0] <= centroid[0] <= roi[2] and roi[1] <= centroid[1] <= roi[3]):
+                                chair_roi = roi
+                                break
+                        
+                        # Klasifikasikan postur dengan parameter baru
+                        posture = self.classify_posture(
+                            kpts=kpts,
+                            bbox=bbox,
+                            roi=chair_roi,
+                            frame_height=frame_height
+                        )
                         if track_id not in self.posture_history:
                             self.posture_history[track_id] = []
                         self.posture_history[track_id].append(posture)
@@ -564,6 +636,14 @@
                         
                         # Simpan keypoints saat ini untuk frame berikutnya
                         self._prev_keypoints[track_id] = kpts
+                
+                # --- Cleanup inactive tracks periodically ---
+                self.cleanup_counter += 1
+                if self.cleanup_counter >= self.cleanup_interval:
+                    removed = self.cleanup_inactive_tracks()
+                    if removed > 0:
+                        print(f"[CLEANUP] Removed {removed} inactive tracks")
+                    self.cleanup_counter = 0
                 
                 # --- Anti-kedipan (yang sudah ada) ---
                 current_raw_status = [False] * len(self.rois)
