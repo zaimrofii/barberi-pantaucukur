@@ -18,15 +18,15 @@
         RIGHT_HIP = 12
 
         class StateMachine:
-            """State machine for session lifecycle management."""
+            """Mesin status untuk manajemen siklus sesi."""
             
             def __init__(self):
-                self.states = {}      # chair_id -> current state
-                self.timers = {}      # chair_id -> timer (seconds in current state)
-                self.scores = {}      # chair_id -> list of recent scores for confirmation window
-                self.pending_start = {}  # chair_id -> timestamp when PENDING started
+                self.states = {}      # chair_id -> status saat ini
+                self.timers = {}      # chair_id -> timer (detik dalam status saat ini)
+                self.scores = {}      # chair_id -> daftar skor terbaru untuk jendela konfirmasi
+                self.pending_start = {}  # chair_id -> timestamp saat PENDING dimulai
                 
-                # Load configuration
+                # Muat konfigurasi
                 load_dotenv()
                 self.pending_duration = int(os.environ.get('PENDING_DURATION', '30'))
                 self.scoring_threshold = int(os.environ.get('SCORING_THRESHOLD', '70'))
@@ -35,10 +35,10 @@
                 self.min_valid_duration = int(os.environ.get('MIN_VALID_DURATION', '180'))
             
             def update(self, chair_id, score, person_count, duration):
-                """Update state machine for a given chair.
+                """Perbarui mesin status untuk kursi tertentu.
                 
                 Returns:
-                    tuple: (new_state, status_changed)
+                    tuple: (status_baru, status_berubah)
                 """
                 if chair_id not in self.states:
                     self.states[chair_id] = 'IDLE'
@@ -50,48 +50,48 @@
                 new_state = current_state
                 status_changed = False
                 
-                # Update timer
-                self.timers[chair_id] += 1  # assuming called every second
+                # Perbarui timer
+                self.timers[chair_id] += 1  # asumsikan dipanggil setiap detik
                 
-                # Store recent scores for confirmation window
+                # Simpan skor terbaru untuk jendela konfirmasi
                 self.scores[chair_id].append(score)
                 if len(self.scores[chair_id]) > self.confirmation_window:
                     self.scores[chair_id].pop(0)
                 
-                # Calculate average score over confirmation window
+                # Hitung skor rata-rata selama jendela konfirmasi
                 avg_score = np.mean(self.scores[chair_id]) if self.scores[chair_id] else 0
                 
-                # State transitions
+                # Transisi status
                 if current_state == 'IDLE':
-                    # Transition to PENDING when 2 persons present for pending_duration
+                    # Transisi ke PENDING ketika 2 orang hadir selama pending_duration
                     if person_count >= 2 and duration >= self.pending_duration:
                         new_state = 'PENDING'
                         self.pending_start[chair_id] = duration
                         status_changed = True
                 
                 elif current_state == 'PENDING':
-                    # Transition to ACTIVE when score >= threshold
+                    # Transisi ke ACTIVE ketika skor >= threshold
                     if avg_score >= self.scoring_threshold:
                         new_state = 'ACTIVE'
                         status_changed = True
-                    # Fallback to IDLE if person count drops below 2
+                    # Kembali ke IDLE jika jumlah orang turun di bawah 2
                     elif person_count < 2:
                         new_state = 'IDLE'
                         status_changed = True
                 
                 elif current_state == 'ACTIVE':
-                    # Transition to ENDING when score drops below threshold for confirmation_window
+                    # Transisi ke ENDING ketika skor turun di bawah threshold selama confirmation_window
                     if avg_score < self.scoring_threshold and len(self.scores[chair_id]) >= self.confirmation_window:
                         new_state = 'ENDING'
                         status_changed = True
                 
                 elif current_state == 'ENDING':
-                    # After cooldown, return to IDLE
+                    # Setelah cooldown, kembali ke IDLE
                     if self.timers[chair_id] >= self.cooldown_seconds:
                         new_state = 'IDLE'
                         status_changed = True
                 
-                # Update state
+                # Perbarui status
                 if new_state != current_state:
                     self.states[chair_id] = new_state
                     self.timers[chair_id] = 0
@@ -174,17 +174,18 @@
                 return occupancy_ratio > 0.4  # Ubah angka ini (0.1 - 0.9) sesuai selera sensitivitasmu
 
             def classify_posture(self, kpts, frame_height=None):
-                """Classify person as SITTING or STANDING based on shoulder-hip relationship.
+                """Mengklasifikasikan seseorang sebagai DUDUK atau BERDIRI berdasarkan hubungan bahu-pinggul.
+
+                    Argumen:
+                    kpts: array numpy dengan bentuk (17, 3) di mana setiap baris adalah [x, y, kepercayaan]
+                    frame_height: tinggi frame untuk normalisasi (opsional)
+                    Mengembalikan:
+                    str: 'DUDUK' atau 'BERDIRI'
                 
-                Args:
-                    kpts: numpy array of shape (17, 3) where each row is [x, y, confidence]
-                    frame_height: height of the frame for normalization (optional)
-                    
-                Returns:
-                    str: 'SITTING' or 'STANDING'
                 """
                 if kpts is None or len(kpts) < 13:
                     return 'STANDING'
+            
                 
                 try:
                     # Check confidence for required keypoints
@@ -204,24 +205,24 @@
                     else:
                         vertical_diff = hip_y - shoulder_y
                     
-                    # Threshold: if vertical distance between shoulders and hips is small (< 0.15 of image height), sitting
+                    # Ambang batas: jika jarak vertikal antara bahu dan pinggul kecil (< 0,15 dari tinggi gambar), duduk 
                     if vertical_diff < 0.15:
                         return 'SITTING'
                     else:
                         return 'STANDING'
                 except Exception:
                     return 'STANDING'  # fallback
-
-            def calculate_hand_activity(self, kpts, prev_kpts=None, frame_height=None):
-                """Calculate hand activity points for current frame.
-                
-                Args:
-                    kpts: numpy array of shape (17, 3) where each row is [x, y, confidence]
-                    prev_kpts: previous frame keypoints for speed calculation
-                    frame_height: height of the frame for normalization
                     
-                Returns:
-                    int: Points for this frame (0-5)
+            def calculate_hand_activity(self, kpts, prev_kpts=None, frame_height=None):
+                """Hitung poin aktivitas tangan untuk frame saat ini.
+
+                Argumen:
+                    kpts: array numpy dengan bentuk (17, 3) di mana setiap baris adalah [x, y, kepercayaan]
+                    prev_kpts: titik kunci frame sebelumnya untuk perhitungan kecepatan
+                    frame_height: tinggi frame untuk normalisasi
+
+                Hasil:
+                    int: Poin untuk frame ini (0-5)
                 """
                 if kpts is None or len(kpts) < 13:
                     return 0
@@ -229,36 +230,36 @@
                 points = 0
                 
                 try:
-                    # Helper to check keypoint confidence
+                    # Fungsi pembantu untuk memeriksa kepercayaan titik kunci
                     def is_reliable(idx):
                         return kpts[idx][2] >= self.keypoint_conf_threshold
                     
-                    # Get keypoint coordinates (pixel values)
+                    # Ambil koordinat titik kunci (nilai piksel)
                     nose = kpts[NOSE]
                     left_wrist = kpts[LEFT_WRIST]
                     right_wrist = kpts[RIGHT_WRIST]
                     left_hip = kpts[LEFT_HIP]
                     right_hip = kpts[RIGHT_HIP]
                     
-                    # 1. Hand above head (wrist y < nose y)
+                    # 1. Tangan di atas kepala (pergelangan tangan y < hidung y)
                     if is_reliable(LEFT_WRIST) and left_wrist[1] < nose[1]:
                         points += 2
                     if is_reliable(RIGHT_WRIST) and right_wrist[1] < nose[1]:
                         points += 2
                     
-                    # 2. Hand near head (< 20cm in normalized coordinates ~0.2)
+                    # 2. Tangan dekat kepala (< 20cm dalam koordinat ternormalisasi ~0.2)
                     if is_reliable(NOSE):
                         head_center = (nose[0], nose[1])
                         for wrist, idx in [(left_wrist, LEFT_WRIST), (right_wrist, RIGHT_WRIST)]:
                             if is_reliable(idx):
                                 distance = np.sqrt((wrist[0] - head_center[0])**2 + (wrist[1] - head_center[1])**2)
-                                # Normalize by frame height if available
+                                # Normalisasi dengan tinggi frame jika tersedia
                                 if frame_height and frame_height > 0:
                                     distance /= frame_height
                                 if distance < 0.2:
                                     points += 1
                     
-                    # 3. Fast hand movement (if previous keypoints available)
+                    # 3. Gerakan tangan cepat (jika titik kunci sebelumnya tersedia)
                     if prev_kpts is not None and len(prev_kpts) >= 13:
                         if is_reliable(LEFT_WRIST) and prev_kpts[LEFT_WRIST][2] >= self.keypoint_conf_threshold:
                             left_speed = np.sqrt((left_wrist[0] - prev_kpts[LEFT_WRIST][0])**2 + 
@@ -269,13 +270,13 @@
                                 points += 1
                         if is_reliable(RIGHT_WRIST) and prev_kpts[RIGHT_WRIST][2] >= self.keypoint_conf_threshold:
                             right_speed = np.sqrt((right_wrist[0] - prev_kpts[RIGHT_WRIST][0])**2 + 
-                                                 (right_wrist[1] - prev_kpts[RIGHT_WRIST][1])**2)
+                                                (right_wrist[1] - prev_kpts[RIGHT_WRIST][1])**2)
                             if frame_height and frame_height > 0:
                                 right_speed /= frame_height
                             if right_speed > 0.05:
                                 points += 1
                     
-                    # 4. Hand at side area (wrist near hip level)
+                    # 4. Tangan di sisi tubuh (pergelangan tangan dekat dengan pinggul)
                     for wrist, hip, wrist_idx, hip_idx in [
                         (left_wrist, left_hip, LEFT_WRIST, LEFT_HIP),
                         (right_wrist, right_hip, RIGHT_WRIST, RIGHT_HIP)
@@ -290,7 +291,7 @@
                 except Exception:
                     pass
                 
-                return min(points, 5)  # cap at 5 points per frame
+                return min(points, 5)  # batasi maksimal 5 poin per frame
 
             def calculate_posture_score(self, chair_id):
                 """Calculate posture score based on sitting/standing combo history."""
@@ -414,7 +415,7 @@
                     return 0
 
             def calculate_score(self, chair_id, tracked_objects, landmarks_dict, duration):
-                """Calculate overall session score for a chair."""
+                """Hitung skor sesi keseluruhan untuk suatu kursi."""
                 # 1. Posture Score (20%)
                 posture_score = self.calculate_posture_score(chair_id)
                 
@@ -464,17 +465,17 @@
                 return inter_area / union_area if union_area > 0 else 0.0
 
             def _match_keypoints_to_tracked(self, yolo_boxes, yolo_keypoints, tracked_objects, iou_threshold=0.3):
-                """Match YOLO detections (with keypoints) to ByteTrack tracked objects using IoU.
-                
-                Args:
-                    yolo_boxes: numpy array of shape (N, 4) with YOLO detection boxes
-                    yolo_keypoints: numpy array of shape (N, 17, 3) with keypoints
-                    tracked_objects: list of ByteTrack objects
-                    iou_threshold: minimum IoU to consider a match
-                    
-                Returns:
-                    dict: track_id -> keypoints array for matched objects
-                """
+                """Mencocokkan deteksi YOLO (dengan titik kunci) dengan objek yang dilacak ByteTrack menggunakan IoU.
+
+                    Argumen:
+                    yolo_boxes: array numpy dengan bentuk (N, 4) berisi kotak deteksi YOLO
+                    yolo_keypoints: array numpy dengan bentuk (N, 17, 3) berisi titik kunci
+                    tracked_objects: daftar objek ByteTrack
+                    iou_threshold: IoU minimum untuk mempertimbangkan kecocokan
+
+                    Hasil:
+                    dict: track_id -> array titik kunci untuk objek yang cocok
+                    """
                 matched = {}
                 used_yolo = set()
                 
@@ -499,31 +500,31 @@
                 return matched
 
             def process_ai(self, frame):
-                """Process frame with AI detection, tracking, pose estimation, and scoring.
+                """Memproses frame dengan deteksi AI, pelacakan, estimasi pose, dan penilaian.
                 
                 Returns:
-                    tuple: (stable_status, person_boxes, session_data) if USE_SCORING=True
-                        (stable_status, person_boxes) if USE_SCORING=False
+                    tuple: (stable_status, person_boxes, session_data) jika USE_SCORING=True
+                        (stable_status, person_boxes) jika USE_SCORING=False
                 """
                 self.frame_count += 1
                 
-                # --- YOLO Detection (with keypoints) ---
+                # --- Deteksi YOLO (dengan keypoints) ---
                 results = self.model(frame, classes=0, conf=self.conf_threshold, verbose=False)
                 person_boxes = results[0].boxes.xyxy.cpu().numpy()
                 
-                # Extract keypoints from YOLO-Pose model
+                # Ekstrak keypoints dari model YOLO-Pose
                 yolo_keypoints = None
                 if results[0].keypoints is not None:
-                    yolo_keypoints = results[0].keypoints.xy.cpu().numpy()  # shape (N, 17, 2)
-                    yolo_keypoints_conf = results[0].keypoints.conf.cpu().numpy()  # shape (N, 17)
-                    # Combine xy and confidence into (N, 17, 3)
+                    yolo_keypoints = results[0].keypoints.xy.cpu().numpy()  # bentuk (N, 17, 2)
+                    yolo_keypoints_conf = results[0].keypoints.conf.cpu().numpy()  # bentuk (N, 17)
+                    # Gabungkan xy dan confidence menjadi (N, 17, 3)
                     yolo_keypoints = np.concatenate([yolo_keypoints, yolo_keypoints_conf[..., np.newaxis]], axis=-1)
                 
-                # --- ByteTrack Tracking ---
+                # --- Pelacakan ByteTrack ---
                 tracked_objects = self.tracker.update(person_boxes)
-                # tracked_objects is a list of detections with track_id attribute
+                # tracked_objects adalah daftar deteksi dengan atribut track_id
                 
-                # --- Match YOLO keypoints to tracked objects ---
+                # --- Cocokkan keypoints YOLO ke objek yang dilacak ---
                 frame_height = frame.shape[0]
                 keypoints_per_track = {}
                 if yolo_keypoints is not None and len(tracked_objects) > 0:
@@ -531,40 +532,40 @@
                         person_boxes, yolo_keypoints, tracked_objects
                     )
                 
-                # --- Update trajectories and posture history ---
+                # --- Perbarui riwayat lintasan dan postur ---
                 for obj in tracked_objects:
                     track_id = obj.track_id
                     bbox = obj.xyxy  # [x1, y1, x2, y2]
                     centroid = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
                     
-                    # Update trajectory
+                    # Perbarui lintasan
                     if track_id not in self.trajectories:
                         self.trajectories[track_id] = []
                     self.trajectories[track_id].append(centroid)
                     
-                    # Get keypoints for this specific track
+                    # Ambil keypoints untuk track spesifik ini
                     kpts = keypoints_per_track.get(track_id)
                     
                     if kpts is not None:
-                        # Classify posture
+                        # Klasifikasikan postur
                         posture = self.classify_posture(kpts, frame_height)
                         if track_id not in self.posture_history:
                             self.posture_history[track_id] = []
                         self.posture_history[track_id].append(posture)
                         
-                        # Get previous keypoints for speed calculation
+                        # Ambil keypoints sebelumnya untuk perhitungan kecepatan
                         prev_kpts = self._prev_keypoints.get(track_id)
                         
-                        # Calculate hand activity
+                        # Hitung aktivitas tangan
                         hand_points = self.calculate_hand_activity(kpts, prev_kpts, frame_height)
                         if track_id not in self.hand_activity:
                             self.hand_activity[track_id] = []
                         self.hand_activity[track_id].append(hand_points)
                         
-                        # Store current keypoints for next frame
+                        # Simpan keypoints saat ini untuk frame berikutnya
                         self._prev_keypoints[track_id] = kpts
                 
-                # --- Anti-flickering (existing) ---
+                # --- Anti-kedipan (yang sudah ada) ---
                 current_raw_status = [False] * len(self.rois)
                 for box in person_boxes:
                     for i, roi in enumerate(self.rois):
@@ -582,22 +583,22 @@
                     elif self.occupancy_counters[i] == 0:
                         self.stable_status[i] = False
                 
-                # --- Scoring and State Machine (if enabled) ---
+                # --- Penilaian dan Mesin Status (jika diaktifkan) ---
                 session_data = {}
                 if self.use_scoring:
                     for chair_id in range(len(self.rois)):
                         if self.stable_status[chair_id]:
-                            # Calculate duration (simplified: use frame count as proxy)
-                            duration = self.frame_count  # frames processed
+                            # Hitung durasi (disederhanakan: gunakan hitungan frame sebagai proksi)
+                            duration = self.frame_count  # frame yang diproses
                             
-                            # Calculate score
+                            # Hitung skor
                             score, breakdown = self.calculate_score(
                                 chair_id, tracked_objects, 
                                 keypoints_per_track,
                                 duration
                             )
                             
-                            # Update state machine
+                            # Perbarui mesin status
                             person_count = sum(1 for obj in tracked_objects if self.check_occupancy(
                                 obj.xyxy, self.rois[chair_id]
                             ))
@@ -605,7 +606,7 @@
                                 chair_id, score, person_count, duration
                             )
                             
-                            # Build session data
+                            # Bangun data sesi
                             person_ids = [obj.track_id for obj in tracked_objects if self.check_occupancy(
                                 obj.xyxy, self.rois[chair_id]
                             )]
