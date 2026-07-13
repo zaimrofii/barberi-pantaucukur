@@ -90,3 +90,60 @@ def draw_roi_event(event, x, y, flags, param):
         state["selected_roi_idx"] = -1
         detector.update_rois(chair_config)
         save_config(chair_config)
+import numpy as np
+
+def compute_iou(box1, box2):
+    """Compute Intersection over Union between two bounding boxes.
+    
+    Args:
+        box1, box2: arrays of [x1, y1, x2, y2]
+        
+    Returns:
+        float: IoU value
+    """
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    
+    inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / union_area if union_area > 0 else 0.0
+
+def match_keypoints_to_tracked(yolo_boxes, yolo_keypoints, tracked_objects, iou_threshold=0.3):
+    """Mencocokkan deteksi YOLO (dengan titik kunci) dengan objek yang dilacak ByteTrack menggunakan IoU.
+
+        Argumen:
+        yolo_boxes: array numpy dengan bentuk (N, 4) berisi kotak deteksi YOLO
+        yolo_keypoints: array numpy dengan bentuk (N, 17, 3) berisi titik kunci
+        tracked_objects: daftar objek ByteTrack
+        iou_threshold: IoU minimum untuk mempertimbangkan kecocokan
+
+        Hasil:
+        dict: track_id -> array titik kunci untuk objek yang cocok
+        """
+    matched = {}
+    used_yolo = set()
+    
+    for obj in tracked_objects:
+        track_id = obj.track_id
+        track_box = obj.xyxy  # [x1, y1, x2, y2]
+        best_iou = 0
+        best_idx = -1
+        
+        for j, yolo_box in enumerate(yolo_boxes):
+            if j in used_yolo:
+                continue
+            iou = compute_iou(track_box, yolo_box)
+            if iou > best_iou:
+                best_iou = iou
+                best_idx = j
+        
+        if best_iou >= iou_threshold and best_idx != -1:
+            matched[track_id] = yolo_keypoints[best_idx]
+            used_yolo.add(best_idx)
+    
+    return matched
