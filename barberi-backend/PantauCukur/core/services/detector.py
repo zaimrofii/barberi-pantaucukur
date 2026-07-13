@@ -141,6 +141,18 @@
                 self.person_count_weight = float(os.environ.get('PERSON_COUNT_WEIGHT', '0.20'))
                 self.keypoint_conf_threshold = float(os.environ.get('KEYPOINT_CONF_THRESHOLD', '0.3'))
                 
+                # --- NEW: Memory leak prevention ---
+                self.track_last_seen = {}  # track_id -> last frame seen
+                self.track_timeout = int(os.environ.get('TRACK_TIMEOUT_SECONDS', '60')) * 30  # 60 seconds * 30 fps
+                self.cleanup_counter = 0
+                self.cleanup_interval = int(os.environ.get('CLEANUP_INTERVAL_FRAMES', '300'))
+                
+                # --- NEW: Posture classification thresholds ---
+                self.sitting_area_ratio_threshold = float(os.environ.get('SITTING_AREA_RATIO_THRESHOLD', '0.55'))
+                self.sitting_temporal_window = int(os.environ.get('SITTING_TEMPORAL_WINDOW', '10'))
+                self.sitting_min_consistent_frames = int(os.environ.get('SITTING_MIN_CONSISTENT_FRAMES', '5'))
+                self.chair_detection_confidence = float(os.environ.get('CHAIR_DETECTION_CONFIDENCE', '0.3'))
+                
                 print("Sistem AI: Model siap dengan YOLO-Pose, ByteTrack, dan Scoring Engine.")
 
             def update_rois(self, new_rois):
