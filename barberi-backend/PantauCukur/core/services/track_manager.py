@@ -15,8 +15,10 @@ class TrackManager:
         self.cleanup_counter = 0
         self.cleanup_interval = int(os.environ.get('CLEANUP_INTERVAL_FRAMES', '300'))
     
-    def update_tracks(self, tracked_objects, keypoints_per_track, rois, frame_height, posture_classifier, hand_activity_func):
+    def update_tracks(self, tracked_objects, keypoints_per_track, rois, frame_height, posture_classifier, hand_activity_func, current_frame=None):
         """Update all track data when new frames arrive."""
+        if current_frame is None:
+            current_frame = 0
         for obj in tracked_objects:
             track_id = obj.track_id
             bbox = obj.xyxy  # [x1, y1, x2, y2]
@@ -28,7 +30,7 @@ class TrackManager:
             self.trajectories[track_id].append(centroid)
             
             # Update last seen frame
-            self.track_last_seen[track_id] = self.frame_count
+            self.track_last_seen[track_id] = current_frame
             
             # Ambil keypoints untuk track spesifik ini
             kpts = keypoints_per_track.get(track_id)

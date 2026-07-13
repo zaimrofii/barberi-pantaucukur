@@ -82,7 +82,8 @@ class BarberDetector:
             rois=self.rois,
             frame_height=frame_height,
             posture_classifier=self.posture_classifier,
-            hand_activity_func=calculate_hand_activity
+            hand_activity_func=calculate_hand_activity,
+            current_frame=self.frame_count
         )
         
         # --- Cleanup inactive tracks periodically ---

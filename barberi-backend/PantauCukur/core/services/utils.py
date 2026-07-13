@@ -1,6 +1,7 @@
 import json
 import cv2
 import os
+import numpy as np
 
 
 def load_config(filename="config.json"):
@@ -90,7 +91,7 @@ def draw_roi_event(event, x, y, flags, param):
         state["selected_roi_idx"] = -1
         detector.update_rois(chair_config)
         save_config(chair_config)
-import numpy as np
+
 
 def compute_iou(box1, box2):
     """Compute Intersection over Union between two bounding boxes.
@@ -112,6 +113,7 @@ def compute_iou(box1, box2):
     union_area = box1_area + box2_area - inter_area
     
     return inter_area / union_area if union_area > 0 else 0.0
+
 
 def match_keypoints_to_tracked(yolo_boxes, yolo_keypoints, tracked_objects, iou_threshold=0.3):
     """Mencocokkan deteksi YOLO (dengan titik kunci) dengan objek yang dilacak ByteTrack menggunakan IoU.

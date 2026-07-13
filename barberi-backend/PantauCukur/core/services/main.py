@@ -4,9 +4,9 @@ import time
 import signal
 import sys
 import redis
-from detector import BarberDetector
-from utils import load_config, save_config, draw_roi_event
-from network import PantauNetwork
+from .detector import BarberDetector
+from .utils import load_config, save_config, draw_roi_event
+from .network import PantauNetwork
 from dotenv import load_dotenv
 
 # ============================================================
