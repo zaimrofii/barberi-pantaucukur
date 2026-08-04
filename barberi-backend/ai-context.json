@@ -7,7 +7,7 @@
     "main_technology": "Django 6.0.4 + YOLOv8-Pose + OpenCV + Channels",
     "repository": "barberi-backend"
   },
-  
+
   "architecture": {
     "overview": "Monolithic Django application with integrated AI service for real-time chair occupancy detection and session management",
     "components": {
@@ -17,7 +17,7 @@
       },
       "ai_engine": {
         "description": "Computer vision service using YOLOv8-Pose for person detection, keypoint estimation, and ROI-based occupancy tracking",
-        "libraries": ["Ultralytics YOLOv8", "OpenCV", "PyTorch"]
+        "libraries": ["Ultralytics YOLOv8", "OpenCV", "PyTorch", "ByteTrack", "MediaPipe"]
       },
       "real_time_layer": {
         "description": "WebSocket connection for live dashboard updates and status notifications",
@@ -40,45 +40,197 @@
       "description": "Main application module",
       "files": {
         "models.py": {
-          "description": "Database models including BarberSession",
-          "key_classes": ["BarberSession"]
+          "description": "Database models including BarberSession with scoring fields",
+          "key_classes": ["BarberSession"],
+          "fields_added": [
+            "confidence_score (IntegerField, 0-100)",
+            "tracking_data (JSONField, per-frame metrics)",
+            "session_status (CharField: PENDING/ACTIVE/ENDED)",
+            "last_heartbeat (DateTimeField, for timeout detection)",
+            "timeout_reason (CharField, nullable)",
+            "ended_by (CharField: AI/TIMEOUT/MANUAL)"
+          ]
         },
         "views.py": {
-          "description": "API endpoints for session management and summary data",
-          "key_functions": ["start_session", "end_session", "get_sessions_summary", "get_current_summary_data"]
+          "description": "API endpoints for session management, scoring, and summary data",
+          "key_functions": [
+            "start_session",
+            "end_session",
+            "update_session",
+            "heartbeat",
+            "get_sessions_summary",
+            "get_current_summary_data",
+            "get_session_detail",
+            "get_session_metrics"
+          ]
         },
         "consumers.py": {
-          "description": "WebSocket consumer for real-time updates",
-          "key_classes": ["ChatConsumer"]
+          "description": "WebSocket consumer for real-time updates with confidence scores",
+          "key_classes": ["ChatConsumer"],
+          "enhancements": [
+            "Sends confidence_score with STATUS_UPDATE",
+            "Sends session_status (PENDING/ACTIVE/ENDED)"
+          ]
         },
         "urls.py": {
           "description": "URL routing for core application",
-          "endpoints": ["/api/session/start/", "/api/session/end/", "/api/session/summary/"]
+          "endpoints": [
+            "/api/session/start/",
+            "/api/session/end/",
+            "/api/session/update/",
+            "/api/session/heartbeat/",
+            "/api/session/summary/",
+            "/api/session/{id}/detail/",
+            "/api/session/metrics/"
+          ]
         },
         "services/": {
-          "description": "AI and network services",
+          "description": "AI and network services (refactored into specialized modules)",
           "files": {
             "detector.py": {
-              "description": "YOLOv8-Pose based person detector with multi-person keypoint estimation and occupancy tracking",
-              "key_classes": ["BarberDetector"]
+              "description": "YOLOv8-Pose based person detector with multi-person keypoint estimation and occupancy tracking (refactored, ~150 lines, coordinates pipeline only)",
+              "key_classes": ["BarberDetector"],
+              "responsibilities": [
+                "Initialize YOLO model and ByteTrack",
+                "Orchestrate detection → tracking → scoring pipeline",
+                "Coordinate between specialized managers",
+                "Draw UI overlay"
+              ]
             },
-            "network.py": {
-              "description": "Network communication with Django backend",
-              "key_classes": ["PantauNetwork"]
+            "state_machine.py": {
+              "description": "Session lifecycle management with timeout detection",
+              "key_classes": ["StateMachine"],
+              "responsibilities": [
+                "Manage IDLE → PENDING → ACTIVE → ENDING → IDLE transitions",
+                "Track state duration and timers per chair",
+                "Maintain score history for confirmation window",
+                "Auto-transition to ENDING on timeout (5 minutes)",
+                "Return status_changed flag for integration with main.py"
+              ]
             },
-            "main.py": {
-              "description": "Main AI engine entry point",
-              "key_functions": ["main"]
+            "scoring_engine.py": {
+              "description": "4-component scoring calculation (Posture 20%, Hand Activity 35%, Temporal 25%, Person Count 20%)",
+              "key_classes": ["ScoringEngine"],
+              "responsibilities": [
+                "Calculate Posture Score using posture classifier",
+                "Calculate Hand Activity Score (barber-filtered)",
+                "Calculate Temporal Score based on duration",
+                "Calculate Person Count Score",
+                "Combine scores with weights from .env",
+                "Return total score + breakdown"
+              ]
+            },
+            "posture_classifier.py": {
+              "description": "Multi-signal sitting/standing classification",
+              "key_classes": ["PostureClassifier"],
+              "responsibilities": [
+                "Classify person as SITTING or STANDING",
+                "Use 3 signals: area ratio, chair presence, temporal consistency",
+                "Voting system to combine signals",
+                "Configurable thresholds from .env"
+              ],
+              "signals": [
+                "Area ratio (bounding box width/height)",
+                "Chair presence (optional, simplified)",
+                "Temporal consistency (10-frame window)"
+              ]
+            },
+            "hand_activity.py": {
+              "description": "Hand activity points calculation with barber filtering and hybrid head detection",
+              "key_functions": ["calculate_hand_activity"],
+              "responsibilities": [
+                "Calculate hand activity points per frame (0-5)",
+                "Filter to only count barber (not customer)",
+                "Identify barber by STANDING posture + proximity to chair",
+                "Hybrid head detection: face bbox → nose → shoulder average",
+                "Check: hand above head, near head, fast movement, at side"
+              ],
+              "head_detection_methods": [
+                "Face bounding box from eyes/nose/ears (preferred)",
+                "Nose keypoint (fallback)",
+                "Average of shoulders (last resort)"
+              ]
+            },
+            "track_manager.py": {
+              "description": "Trajectory & data management with automatic cleanup",
+              "key_classes": ["TrackManager"],
+              "responsibilities": [
+                "Maintain trajectories per track_id",
+                "Maintain posture history per track_id",
+                "Maintain hand activity history per track_id",
+                "Maintain previous keypoints for speed calculation",
+                "Track last seen frame for each track_id",
+                "Cleanup inactive tracks (>60 seconds)",
+                "Identify barber vs customer for each chair"
+              ]
+            },
+            "roi_manager.py": {
+              "description": "ROI & occupancy management with anti-flickering smoothing",
+              "key_classes": ["ROIManager"],
+              "responsibilities": [
+                "Maintain ROI list per chair",
+                "Update ROIs",
+                "Check occupancy (person in ROI)",
+                "Anti-flickering smoothing (threshold_frames)",
+                "Count persons in ROI",
+                "Stable status management"
+              ]
             },
             "utils.py": {
-              "description": "Utility functions for ROI management and configuration",
-              "key_functions": ["load_config", "save_config", "draw_roi_event"]
+              "description": "Helper functions for ROI management, configuration, and matching",
+              "key_functions": [
+                "load_config",
+                "save_config",
+                "draw_roi_event",
+                "compute_iou",
+                "match_keypoints_to_tracked"
+              ]
+            },
+            "network.py": {
+              "description": "Network communication with Django backend including scoring data",
+              "key_classes": ["PantauNetwork"],
+              "key_methods": [
+                "report_status_change() - legacy boolean only",
+                "report_session_update() - full scoring data",
+                "send_heartbeat() - keepalive for session timeout"
+              ],
+              "data_sent": [
+                "chair_id",
+                "is_active",
+                "confidence_score",
+                "session_status (PENDING/ACTIVE/ENDED)",
+                "timestamp"
+              ]
+            },
+            "main.py": {
+              "description": "Main AI engine entry point with state machine integration",
+              "key_functions": ["main"],
+              "responsibilities": [
+                "Load ROI config and initialize detector",
+                "Connect to camera stream",
+                "Main loop: read frame → process_ai() → handle session_data",
+                "Check status_changed flag from state machine",
+                "Send full session updates to Django via network",
+                "Heartbeat: send keepalive every 30 seconds",
+                "Graceful shutdown with cleanup"
+              ]
             },
             "config.json": {
               "description": "ROI (Region of Interest) configuration storage"
             },
             "requirements.txt": {
-              "description": "Python dependencies for AI engine"
+              "description": "Python dependencies for AI engine",
+              "packages": [
+                "ultralytics>=8.0.0",
+                "opencv-python",
+                "torch",
+                "torchvision",
+                "requests",
+                "python-dotenv",
+                "redis",
+                "mediapipe",
+                "boxmot"
+              ]
             }
           }
         }
@@ -105,7 +257,13 @@
         "start_time": "DateTimeField - session start timestamp (auto-set)",
         "end_time": "DateTimeField - session end timestamp (nullable)",
         "duration_seconds": "IntegerField - total duration in seconds",
-        "is_valid": "BooleanField - True if duration > threshold (16 seconds)"
+        "is_valid": "BooleanField - True if duration > MIN_VALID_DURATION and score >= SCORING_THRESHOLD",
+        "confidence_score": "IntegerField - session confidence score (0-100)",
+        "tracking_data": "JSONField - per-frame tracking metrics and session data",
+        "session_status": "CharField - PENDING/ACTIVE/ENDED",
+        "last_heartbeat": "DateTimeField - last update timestamp (for timeout detection)",
+        "timeout_reason": "CharField - reason if session ended by timeout (nullable)",
+        "ended_by": "CharField - AI/TIMEOUT/MANUAL (who ended the session)"
       },
       "meta": {
         "ordering": ["-start_time"]
@@ -116,25 +274,95 @@
   "api_endpoints": {
     "session_management": {
       "POST /api/session/start/": {
-        "description": "Start a new session when person sits down",
-        "request": {"chair_id": "integer (1-n)"},
-        "response": {"status": "success/failure", "session_id": "integer", "message": "string"},
-        "side_effects": "Creates BarberSession record, triggers WebSocket update"
+        "description": "Start a new session with scoring data",
+        "request": {
+          "chair_id": "integer (1-n)",
+          "confidence_score": "integer (0-100)",
+          "session_status": "string (PENDING/ACTIVE)"
+        },
+        "response": {
+          "status": "success/failure",
+          "session_id": "integer",
+          "message": "string"
+        },
+        "side_effects": "Creates BarberSession with scoring fields, triggers WebSocket update"
       },
       "POST /api/session/end/": {
-        "description": "End active session when person leaves",
-        "request": {"chair_id": "integer (1-n)"},
-        "response": {"status": "success/failure", "duration": "integer (seconds)", "is_valid": "boolean"},
-        "side_effects": "Updates BarberSession, triggers WebSocket update"
+        "description": "End active session with scoring data",
+        "request": {
+          "chair_id": "integer (1-n)",
+          "confidence_score": "integer (0-100)",
+          "session_status": "string (ENDED)",
+          "ended_by": "string (AI/TIMEOUT/MANUAL)"
+        },
+        "response": {
+          "status": "success/failure",
+          "duration": "integer (seconds)",
+          "is_valid": "boolean",
+          "confidence_score": "integer"
+        },
+        "side_effects": "Updates BarberSession with scoring fields, triggers WebSocket update"
+      },
+      "POST /api/session/update/": {
+        "description": "Update session state (PENDING → ACTIVE transition)",
+        "request": {
+          "chair_id": "integer (1-n)",
+          "confidence_score": "integer (0-100)",
+          "session_status": "string (ACTIVE)"
+        },
+        "side_effects": "Updates session status, triggers WebSocket update"
+      },
+      "POST /api/session/heartbeat/": {
+        "description": "Keepalive endpoint to prevent session timeout",
+        "request": {
+          "chair_id": "integer (1-n)",
+          "timestamp": "string (ISO datetime)"
+        },
+        "side_effects": "Updates last_heartbeat field"
       }
     },
     "summary": {
       "GET /api/session/summary/": {
         "description": "Get summarized session data",
         "response": {
-          "summary": {"total_valid": "integer", "total_invalid": "integer"},
+          "summary": {
+            "total_valid": "integer",
+            "total_invalid": "integer"
+          },
           "valid_list": "[array of valid sessions (max 10)]",
           "invalid_list": "[array of invalid sessions (max 10)]"
+        }
+      }
+    },
+    "session_detail": {
+      "GET /api/session/{id}/detail/": {
+        "description": "Get detailed session with confidence breakdown",
+        "response": {
+          "id": "integer",
+          "chair_number": "integer",
+          "duration_seconds": "integer",
+          "is_valid": "boolean",
+          "confidence_score": "integer",
+          "session_status": "string",
+          "score_breakdown": {
+            "posture": "integer",
+            "hand_activity": "integer",
+            "temporal": "integer",
+            "person_count": "integer"
+          },
+          "tracking_data": "object"
+        }
+      }
+    },
+    "metrics": {
+      "GET /api/session/metrics/": {
+        "description": "Get real-time metrics per chair",
+        "response": {
+          "chair_id": "integer",
+          "current_score": "integer",
+          "current_status": "string",
+          "duration": "integer",
+          "person_count": "integer"
         }
       }
     },
@@ -163,11 +391,13 @@
         "data": "Full summary data for dashboard initialization"
       },
       "STATUS_UPDATE": {
-        "trigger": "On any chair occupancy change",
+        "trigger": "On any chair state change",
         "data": {
           "type": "STATUS_UPDATE",
           "chair_id": "integer",
           "is_occupied": "boolean",
+          "confidence_score": "integer",
+          "session_status": "string (PENDING/ACTIVE/ENDED)",
           "message": "string",
           "updated_summary": "Latest summary data"
         }
@@ -189,6 +419,41 @@
       "create": "Left-click drag",
       "delete": "Right-click on existing ROI",
       "move": "Left-click drag existing ROI"
+    },
+    "tracking": {
+      "tracker": "ByteTrack",
+      "timeout_seconds": 60,
+      "cleanup_interval_frames": 300
+    },
+    "posture": {
+      "area_ratio_threshold": 0.55,
+      "temporal_window": 10,
+      "min_consistent_frames": 5,
+      "vote_threshold": 2
+    },
+    "hand_activity": {
+      "head_detection_method": "hybrid",
+      "face_keypoint_confidence": 0.3,
+      "head_bbox_expand_ratio": 1.5,
+      "barber_standing_threshold": 0.5,
+      "barber_proximity_threshold": 100
+    },
+    "scoring": {
+      "weights": {
+        "hand_activity": 0.35,
+        "posture": 0.20,
+        "temporal": 0.25,
+        "person_count": 0.20
+      },
+      "min_valid_duration": 180,
+      "scoring_threshold": 70,
+      "pending_duration": 30,
+      "confirmation_window": 10
+    },
+    "session_timeout": {
+      "timeout_seconds": 300,
+      "heartbeat_interval_frames": 900,
+      "timeout_action": "auto_end"
     }
   },
 
@@ -197,24 +462,43 @@
       "steps": [
         "AI Engine captures video frame from IP camera",
         "YOLOv8-Pose detects persons and keypoints in frame",
+        "ByteTrack tracks persons with unique IDs",
         "Detector compares person boxes with defined ROIs",
-        "Smoothing algorithm prevents flickering",
-        "Status change triggers API call to Django",
+        "ROIManager applies anti-flickering smoothing",
+        "State machine determines session state (PENDING/ACTIVE/ENDED)",
+        "Status change triggers API call to Django with scoring data",
         "Django updates database and broadcasts via WebSocket"
       ]
     },
     "session_management": {
+      "state_machine": [
+        "IDLE → PENDING: 2 persons detected for 30 seconds",
+        "PENDING → ACTIVE: score ≥ 70",
+        "ACTIVE → ENDING: score < 70 for 10 seconds",
+        "ENDING → IDLE: cooldown 5 seconds",
+        "ACTIVE → ENDING: timeout after 5 minutes no update"
+      ],
       "start": [
-        "AI detects person occupying chair",
-        "POST /api/session/start/ called",
-        "New BarberSession record created",
+        "AI detects 2 persons in chair area",
+        "State machine transitions to PENDING",
+        "After scoring threshold met, transitions to ACTIVE",
+        "POST /api/session/start/ called with confidence_score",
+        "New BarberSession record created with scoring fields",
         "WebSocket broadcast sent to all connected clients"
       ],
       "end": [
-        "AI detects chair is empty",
-        "POST /api/session/end/ called",
+        "AI detects person(s) left or score drops below threshold",
+        "State machine transitions to ENDING",
+        "POST /api/session/end/ called with scoring data",
         "End timestamp and duration calculated",
-        "Session marked valid if duration > 16 seconds",
+        "Session marked valid if duration > 180s and score ≥ 70",
+        "WebSocket broadcast sent to all connected clients"
+      ],
+      "timeout": [
+        "No heartbeat received for 5 minutes",
+        "State machine auto-transitions to ENDING",
+        "POST /api/session/end/ called with ended_by=TIMEOUT",
+        "Session marked invalid with timeout_reason",
         "WebSocket broadcast sent to all connected clients"
       ]
     }
@@ -231,7 +515,9 @@
       "ultralytics": "8.4.37",
       "opencv-python": "4.13.0.92",
       "torch": "2.11.0",
-      "torchvision": "0.26.0"
+      "torchvision": "0.26.0",
+      "mediapipe": "latest",
+      "boxmot": "latest"
     },
     "network": {
       "requests": "2.33.1",
@@ -252,8 +538,17 @@
     },
     "ai_engine_notes": {
       "performance": "AI processing runs every frame (no skip) since YOLO-Pose provides both detection and keypoints in a single inference",
-      "network_timeout": "API calls have 0.5s timeout to prevent AI engine freeze if Django server is down"
+      "network_timeout": "API calls have 0.5s timeout to prevent AI engine freeze if Django server is down",
+      "refactoring": "detector.py split into 8 specialized modules for maintainability"
     },
+    "fixes_applied": [
+      "Memory leak: Track cleanup every 300 frames, remove tracks inactive >60s",
+      "False standing: Multi-signal posture detection (area ratio + temporal)",
+      "Hand activity: Filter to only barber (standing + proximity to chair)",
+      "Head detection: Hybrid method (face bbox → nose → shoulders)",
+      "State machine integration: main.py now processes session_data",
+      "Session timeout: Watchdog timer auto-ends sessions after 5 minutes"
+    ],
     "future_improvements": [
       "Convert main.py functions into a class-based App for multiple camera support",
       "Implement ROI update/delete/move functionality",
@@ -264,18 +559,32 @@
   },
 
   "configuration_constants": {
-    "min_session_duration": 16,
+    "min_session_duration": 180,
     "occupancy_threshold": 0.4,
     "anti_flickering_frames": 5,
     "keypoint_conf_threshold": 0.3,
     "network_timeout": 0.5,
-    "camera_url": "http://192.168.1.8:8080/video"
+    "camera_url": "http://192.168.1.8:8080/video",
+    "scoring_threshold": 70,
+    "pending_duration": 30,
+    "session_timeout_seconds": 300,
+    "track_timeout_seconds": 60
   },
 
   "testing": {
     "http_testing": "core/test.http file with REST Client compatible requests",
     "manual_testing": "Run AI engine with `python core/services/main.py`",
-    "django_testing": "Run `python manage.py runserver`"
+    "django_testing": "Run `python manage.py runserver`",
+    "test_scenarios": [
+      "Normal haircut 15 min → ACTIVE + score > 70",
+      "Customer waiting 5 min → INACTIVE + score < 50",
+      "Barber gets tool 5 sec → remains ACTIVE",
+      "Barber facing away → remains ACTIVE (posture/temporal)",
+      "Customer pays at counter → ENDED",
+      "Barber resting in chair → INACTIVE",
+      "Customer playing phone → not counted as hand activity",
+      "AI crash → session auto-ends after 5 min timeout"
+    ]
   },
 
   "deployment_notes": {
@@ -292,13 +601,21 @@
   "common_issues": {
     "flickering": "Fixed with anti-flickering threshold system",
     "network_failure": "AI engine continues running even if Django server is down",
-    "session_validation": "Sessions are only valid if duration > 16 seconds",
-    "websocket_initialization": "Client must handle INITIAL_CONNECTION and STATUS_UPDATE messages differently"
+    "session_validation": "Sessions are valid if duration > 180s AND score ≥ 70",
+    "websocket_initialization": "Client must handle INITIAL_CONNECTION and STATUS_UPDATE messages differently",
+    "memory_leak": "Fixed with TrackManager cleanup every 300 frames",
+    "false_standing": "Fixed with multi-signal posture classifier",
+    "hand_activity": "Fixed with barber filtering (customers not counted)",
+    "session_timeout": "Fixed with watchdog timer (5 min auto-end)"
   },
 
   "frontend_integration": {
     "websocket_messages": "Client should listen on ws://[host]/ws/test/",
     "message_types": ["INITIAL_CONNECTION", "STATUS_UPDATE"],
-    "state_management": "Maintain local chair status state and update from WebSocket messages"
+    "state_management": "Maintain local chair status state and update from WebSocket messages",
+    "new_fields": [
+      "confidence_score (display score gauge)",
+      "session_status (show PENDING/ACTIVE/ENDED status badge)"
+    ]
   }
 }

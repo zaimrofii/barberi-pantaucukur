@@ -86,6 +86,23 @@ class BarberDetector:
             current_frame=self.frame_count
         )
         
+        # --- Identify barber for each chair ---
+        for chair_id in range(len(self.rois)):
+            barber_tid = self.track_manager.identify_barber_for_chair(
+                chair_id, self.rois, tracked_objects
+            )
+            if barber_tid is not None:
+                self.track_manager.person_types[barber_tid] = 'barber'
+                # Mark customer (person inside ROI)
+                for obj in tracked_objects:
+                    if obj.track_id != barber_tid:
+                        bbox = obj.xyxy
+                        centroid = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+                        if chair_id < len(self.rois):
+                            roi = self.rois[chair_id]
+                            if (roi[0] <= centroid[0] <= roi[2] and roi[1] <= centroid[1] <= roi[3]):
+                                self.track_manager.person_types[obj.track_id] = 'customer'
+        
         # --- Cleanup inactive tracks periodically ---
         self.track_manager.cleanup_counter += 1
         if self.track_manager.cleanup_counter >= self.track_manager.cleanup_interval:

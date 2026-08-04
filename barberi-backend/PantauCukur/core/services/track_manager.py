@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from dotenv import load_dotenv
 
 class TrackManager:
@@ -14,6 +15,7 @@ class TrackManager:
         self.track_timeout = int(os.environ.get('TRACK_TIMEOUT_SECONDS', '60')) * 30  # 60 seconds * 30 fps
         self.cleanup_counter = 0
         self.cleanup_interval = int(os.environ.get('CLEANUP_INTERVAL_FRAMES', '300'))
+        self.person_types = {}  # track_id -> 'barber', 'customer', or 'unknown'
     
     def update_tracks(self, tracked_objects, keypoints_per_track, rois, frame_height, posture_classifier, hand_activity_func, current_frame=None):
         """Update all track data when new frames arrive."""
@@ -57,14 +59,75 @@ class TrackManager:
                 # Ambil keypoints sebelumnya untuk perhitungan kecepatan
                 prev_kpts = self._prev_keypoints.get(track_id)
                 
-                # Hitung aktivitas tangan
-                hand_points = hand_activity_func(kpts, prev_kpts, frame_height)
+                # Hitung aktivitas tangan (dengan parameter barber filtering)
+                hand_points = hand_activity_func(
+                    kpts, 
+                    prev_kpts, 
+                    frame_height,
+                    chair_id=None,  # Will be set per chair in scoring_engine
+                    rois=rois,
+                    posture_history=self.posture_history,
+                    tracked_objects=tracked_objects,
+                    track_id=track_id
+                )
                 if track_id not in self.hand_activity:
                     self.hand_activity[track_id] = []
                 self.hand_activity[track_id].append(hand_points)
                 
                 # Simpan keypoints saat ini untuk frame berikutnya
                 self._prev_keypoints[track_id] = kpts
+    
+    def identify_barber_for_chair(self, chair_id, rois, tracked_objects):
+        """Identify which track_id is the barber for a given chair.
+        
+        Returns:
+            int or None: track_id of barber, or None if not found
+        """
+        if chair_id >= len(rois):
+            return None
+        
+        chair_roi = rois[chair_id]
+        chair_center = ((chair_roi[0] + chair_roi[2]) / 2, (chair_roi[1] + chair_roi[3]) / 2)
+        
+        barber_candidates = []
+        
+        for obj in tracked_objects:
+            track_id = obj.track_id
+            bbox = obj.xyxy
+            centroid = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+            
+            # Check if person is inside ROI (customer)
+            is_inside_roi = (chair_roi[0] <= centroid[0] <= chair_roi[2] and 
+                            chair_roi[1] <= centroid[1] <= chair_roi[3])
+            
+            if is_inside_roi:
+                continue  # Skip customers
+            
+            # Get posture
+            posture = None
+            if track_id in self.posture_history and self.posture_history[track_id]:
+                posture = self.posture_history[track_id][-1]
+            
+            if posture != 'STANDING':
+                continue  # Barber should be standing
+            
+            # Check proximity to chair
+            distance = np.sqrt((centroid[0] - chair_center[0])**2 + (centroid[1] - chair_center[1])**2)
+            if distance > 200:  # Max distance from chair (pixels)
+                continue
+            
+            barber_candidates.append((track_id, distance))
+        
+        if not barber_candidates:
+            return None
+        
+        # Return closest standing person to chair
+        barber_candidates.sort(key=lambda x: x[1])
+        return barber_candidates[0][0]
+    
+    def get_person_type(self, track_id):
+        """Return 'barber', 'customer', or 'unknown'."""
+        return self.person_types.get(track_id, 'unknown')
     
     def cleanup(self, current_frame):
         """Remove track data that hasn't been seen for > timeout frames."""
@@ -81,6 +144,7 @@ class TrackManager:
             self.hand_activity.pop(track_id, None)
             self._prev_keypoints.pop(track_id, None)
             self.track_last_seen.pop(track_id, None)
+            self.person_types.pop(track_id, None)
         
         return len(to_remove)
     

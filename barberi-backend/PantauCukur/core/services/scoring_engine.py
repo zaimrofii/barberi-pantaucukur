@@ -99,25 +99,43 @@ class ScoringEngine:
         else:
             return 0
     
-    def calculate_hand_score(self, chair_id, track_manager, rois):
-        """Calculate hand activity score (0-100) based on accumulated points."""
-        total_points = 0
-        total_frames = 0
+    def calculate_hand_score(self, chair_id, track_manager, rois, tracked_objects=None):
+        """Calculate hand activity score (0-100) based on barber's hand activity only."""
+        # Identify barber for this chair
+        barber_track_id = track_manager.identify_barber_for_chair(chair_id, rois, tracked_objects or [])
         
-        for tid, points_list in track_manager.hand_activity.items():
-            # Check if this track belongs to this chair
-            if tid in track_manager.trajectories and track_manager.trajectories[tid]:
-                centroid = track_manager.trajectories[tid][-1]
-                if chair_id < len(rois):
-                    roi = rois[chair_id]
-                    if (roi[0] <= centroid[0] <= roi[2] and roi[1] <= centroid[1] <= roi[3]):
-                        total_points += sum(points_list)
-                        total_frames += len(points_list)
+        if barber_track_id is None:
+            # Fallback: use all persons in chair (old behavior)
+            total_points = 0
+            total_frames = 0
+            
+            for tid, points_list in track_manager.hand_activity.items():
+                if tid in track_manager.trajectories and track_manager.trajectories[tid]:
+                    centroid = track_manager.trajectories[tid][-1]
+                    if chair_id < len(rois):
+                        roi = rois[chair_id]
+                        if (roi[0] <= centroid[0] <= roi[2] and roi[1] <= centroid[1] <= roi[3]):
+                            total_points += sum(points_list)
+                            total_frames += len(points_list)
+            
+            if total_frames == 0:
+                return 0
+            
+            max_possible = total_frames * 5
+            score = (total_points / max_possible) * 100 if max_possible > 0 else 0
+            return min(int(score), 100)
+        
+        # Use only barber's hand activity
+        points_list = track_manager.hand_activity.get(barber_track_id, [])
+        if not points_list:
+            return 0
+        
+        total_points = sum(points_list)
+        total_frames = len(points_list)
         
         if total_frames == 0:
             return 0
         
-        # Normalize to 0-100 (max 5 points per frame)
         max_possible = total_frames * 5
         score = (total_points / max_possible) * 100 if max_possible > 0 else 0
         return min(int(score), 100)

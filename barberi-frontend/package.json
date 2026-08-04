@@ -5,6 +5,7 @@
 		"tailwindcss": "^4.2.2"
 	},
 	"dependencies": {
-		"lucide-react": "^1.8.0"
+		"lucide-react": "^1.8.0",
+		"pnpm": "^11.9.0"
 	}
 }
