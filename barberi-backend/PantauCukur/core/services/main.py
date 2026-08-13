@@ -8,6 +8,7 @@ from detector import BarberDetector
 from utils import load_config, save_config, draw_roi_event
 from network import PantauNetwork
 from dotenv import load_dotenv
+from logger import log_event, check_redis_connection, set_frame_count
 
 # ============================================================
 # HEADLESS MODE - Matikan GUI kalau di server
@@ -19,7 +20,7 @@ HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
 if HEADLESS:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     os.environ["DISPLAY"] = ":0"
-    print("[SYSTEM] Running in HEADLESS mode (no GUI)")
+    log_event("system", "HEADLESS_MODE", level="INFO", mode="enabled")
 
 # Global variable buat Django
 LATEST_FRAME = None
@@ -30,13 +31,14 @@ RUNNING = True
 HEARTBEAT_INTERVAL_FRAMES = int(os.environ.get("HEARTBEAT_INTERVAL_FRAMES", "900"))  # 30 detik pada 30fps
 SESSION_UPDATE_INTERVAL = int(os.environ.get("SESSION_UPDATE_INTERVAL", "5"))  # frame
 
+# Konfigurasi logging
+INFERENCE_LOG_SAMPLE_RATE = int(os.environ.get("INFERENCE_LOG_SAMPLE_RATE", "50"))
 
 def signal_handler(sig, frame):
     """Graceful shutdown kalo di Ctrl+C"""
     global RUNNING
-    print("\n[SYSTEM] Received interrupt signal. Shutting down gracefully...")
+    log_event("system", "SIGNAL_RECEIVED", level="INFO", signal=sig)
     RUNNING = False
-
 
 def main():
     global LATEST_FRAME, RUNNING
@@ -45,27 +47,37 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    print("\n" + "=" * 40)
-    print("      PANTAUCUKUR AI ENGINE v1.0      ")
-    print("=" * 40)
-
     # ============================================================
-    # CONFIG - Bisa dari env variable
+    # ENGINE START EVENT
     # ============================================================
     STREAM_URL = os.environ.get("CAMERA_URL", "http://192.168.1.155:8080/video")
     SKIP_FRAMES = int(os.environ.get("SKIP_FRAMES", 10))
     use_scoring = os.environ.get("USE_SCORING", "true").lower() == "true"
+    
+    # Cek koneksi Redis
+    redis_connected = check_redis_connection()
+    
+    # Load config
+    CHAIR_CONFIG = load_config()
+    
+    log_event("system", "ENGINE_START", level="INFO",
+              headless_mode=HEADLESS,
+              camera_url=STREAM_URL,
+              skip_frames=SKIP_FRAMES,
+              use_scoring=use_scoring,
+              roi_count=len(CHAIR_CONFIG),
+              redis_connected=redis_connected)
+
     session_data = {}
 
     # 1. Inisialisasi Data
-    print("[SYSTEM] Menginisialisasi konfigurasi kursi...")
-    CHAIR_CONFIG = load_config()
-    print(f"[SYSTEM] {len(CHAIR_CONFIG)} kursi dimuat dari config.")
+    log_event("system", "CONFIG_LOADED", level="INFO", roi_count=len(CHAIR_CONFIG))
 
-    print("[SYSTEM] Memuat Model AI YOLOv8...")
+    log_event("system", "MODEL_LOADING", level="INFO")
     detector = BarberDetector(rois=CHAIR_CONFIG)
+    log_event("system", "MODEL_LOADED", level="INFO")
 
-    print("[SYSTEM] Mengaktifkan jalur API Network...")
+    log_event("system", "NETWORK_INIT", level="INFO")
     network = PantauNetwork()
 
     last_status = [False] * len(CHAIR_CONFIG)
@@ -82,30 +94,32 @@ def main():
             "PantauCukur AI Dashboard", draw_roi_event, callback_params
         )
     else:
-        print("[SYSTEM] Headless mode: GUI disabled")
+        log_event("system", "HEADLESS_MODE", level="INFO", mode="enabled")
 
     # ============================================================
     # CONNECT TO CAMERA
     # ============================================================
-    print(f"[SYSTEM] Menghubungkan ke kamera: {STREAM_URL}...")
+    log_event("system", "CAMERA_CONNECTING", level="INFO", stream_url=STREAM_URL)
     cap = cv2.VideoCapture(STREAM_URL)
 
     # Setting buffer kecil buat kurangi delay
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     if not cap.isOpened():
-        print("[ERROR] Gagal membuka stream! Pastikan IP Webcam aktif.")
+        log_event("error", "CAMERA_OPEN_FAILED", level="ERROR", stream_url=STREAM_URL)
         return
 
-    print("[SUCCESS] Engine Berjalan.")
-    print(f"  - Mode: {'HEADLESS' if HEADLESS else 'GUI'}")
-    print(f"  - Skip frames: {SKIP_FRAMES}")
-    print("  - Tekan 'q' untuk keluar, 'c' untuk reset ROI.")
-    print("-" * 40)
+    log_event("system", "ENGINE_RUNNING", level="INFO",
+              headless=HEADLESS,
+              skip_frames=SKIP_FRAMES)
 
     frame_count = 0
     reconnect_attempts = 0
     max_reconnect_attempts = 5
+    start_time = time.time()
+    last_heartbeat_time = time.time()
+    last_inference_time = time.time()
+    last_person_count = 0
 
     while RUNNING:
         try:
@@ -116,17 +130,21 @@ def main():
             # ============================================================
             if not ret:
                 reconnect_attempts += 1
-                print(
-                    f"[WARN] Frame kosong ({reconnect_attempts}/{max_reconnect_attempts})..."
-                )
+                log_event("warning", "FRAME_DROP", level="WARNING",
+                          reconnect_attempts=reconnect_attempts,
+                          frame_count=frame_count,
+                          stream_url=STREAM_URL)
 
                 if reconnect_attempts >= max_reconnect_attempts:
-                    print("[ERROR] Max reconnect attempts reached. Reconnecting...")
+                    log_event("error", "MAX_RECONNECT_ATTEMPTS", level="ERROR",
+                              attempts=reconnect_attempts)
                     cap.release()
                     time.sleep(1)
                     cap = cv2.VideoCapture(STREAM_URL)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                     reconnect_attempts = 0
+                    log_event("system", "STREAM_RECONNECTED", level="INFO",
+                              stream_url=STREAM_URL)
 
                 time.sleep(0.1)
                 continue
@@ -142,12 +160,14 @@ def main():
             # Store in Redis with 5-second expiry
             REDIS_CLIENT.setex("latest_frame", 5, buffer.tobytes())
             frame_count += 1
+            set_frame_count(frame_count)
 
             # ============================================================
             # AI PROCESSING (Skip beberapa frame biar ringan)
             # ============================================================
             if frame_count % SKIP_FRAMES == 0:
-                # Gunakan USE_SCORING untuk menentukan apakah session_data dikembalikan
+                # Ukur waktu inferensi
+                inference_start = time.time()
                 
                 if use_scoring:
                     new_status, last_boxes, session_data = detector.process_ai(frame)
@@ -155,9 +175,21 @@ def main():
                     new_status, last_boxes, session_data = detector.process_ai(frame)
                     # session_data = {}
 
+                inference_time_ms = (time.time() - inference_start) * 1000
+
                 # Sinkronisasi jumlah list
                 while len(last_status) < len(new_status):
                     last_status.append(False)
+
+                # ============================================================
+                # INFERENCE COMPLETE EVENT (sampling)
+                # ============================================================
+                if frame_count % INFERENCE_LOG_SAMPLE_RATE == 0:
+                    person_count_delta = len(new_status) - last_person_count
+                    log_event("system", "INFERENCE_COMPLETE", level="INFO",
+                              inference_time_ms=round(inference_time_ms, 2),
+                              person_count_delta=person_count_delta)
+                    last_person_count = len(new_status)
 
                 # ============================================================
                 # NETWORK & STATE MONITORING - Kirim perubahan ke Django
@@ -168,12 +200,15 @@ def main():
                     # 1. Kirim status occupancy (binary) jika berubah
                     if i < len(last_status) and new_status[i] != last_status[i]:
                         status_str = "TERISI" if new_status[i] else "KOSONG"
-                        print(f"[EVENT] Perubahan Status - Kursi {chair_id}: {status_str}")
+                        log_event("event", "STATUS_CHANGE", level="INFO",
+                                  chair_id=chair_id,
+                                  status=status_str)
 
                         # Kirim ke Django (binary occupancy)
                         success = network.report_status_change(chair_id, new_status[i])
                         if not success:
-                            print(f"[WARN] Gagal kirim status kursi {chair_id} ke server")
+                            log_event("warning", "STATUS_SEND_FAILED", level="WARNING",
+                                      chair_id=chair_id)
 
                         # Update memori
                         last_status[i] = new_status[i]
@@ -182,7 +217,10 @@ def main():
                     if use_scoring and session_data and i in session_data:
                         sd = session_data[i]
                         if sd.get('status_changed', False):
-                            print(f"[EVENT] State Machine - Kursi {chair_id}: {sd['session_status']} (score={sd['confidence_score']})")
+                            log_event("event", "STATE_MACHINE_CHANGE", level="INFO",
+                                      chair_id=chair_id,
+                                      session_status=sd['session_status'],
+                                      confidence_score=sd['confidence_score'])
                             
                             # Kirim session update ke Django
                             success = network.report_session_update(
@@ -192,7 +230,8 @@ def main():
                                 session_status=sd['session_status']
                             )
                             if not success:
-                                print(f"[WARN] Gagal kirim session update kursi {chair_id} ke server")
+                                log_event("warning", "SESSION_UPDATE_FAILED", level="WARNING",
+                                          chair_id=chair_id)
                         
                         # Simpan session_data terakhir untuk heartbeat
                         last_session_data[i] = sd
@@ -208,6 +247,21 @@ def main():
                                 confidence_score=sd.get('confidence_score', 0),
                                 session_status=sd.get('session_status', 'IDLE')
                             )
+
+            # ============================================================
+            # HEARTBEAT EVENT (setiap 500 frame)
+            # ============================================================
+            if frame_count % 500 == 0:
+                uptime_seconds = time.time() - start_time
+                fps_actual = frame_count / uptime_seconds if uptime_seconds > 0 else 0
+                active_sessions = sum(1 for sd in last_session_data.values() if sd.get('is_active', False))
+                redis_connected = check_redis_connection()
+                
+                log_event("system", "HEARTBEAT", level="INFO",
+                          uptime_seconds=round(uptime_seconds, 2),
+                          fps_actual=round(fps_actual, 2),
+                          active_sessions=active_sessions,
+                          redis_connected=redis_connected)
 
             # ============================================================
             # UI DRAWING
@@ -257,31 +311,33 @@ def main():
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
-                    print("[SYSTEM] Mematikan Engine...")
+                    log_event("system", "ENGINE_STOPPED", level="INFO", reason="user_quit")
                     RUNNING = False
                     break
                 elif key == ord("c"):
-                    print("[ACTION] Melakukan reset ROI kursi...")
+                    log_event("action", "ROI_RESET", level="INFO")
                     CHAIR_CONFIG.clear()
                     last_status.clear()
                     detector.update_rois(CHAIR_CONFIG)
                     save_config(CHAIR_CONFIG)
-                    print("[SUCCESS] Konfigurasi dibersihkan.")
+                    log_event("system", "ROI_RESET_COMPLETE", level="INFO")
             else:
                 # Headless: kasih tau masih hidup
                 if frame_count % 500 == 0:
-                    print(f"[HEARTBEAT] Running... {frame_count} frames processed")
+                    log_event("system", "HEADLESS_HEARTBEAT", level="INFO",
+                              frame_count=frame_count)
 
         except Exception as e:
-            print(f"[ERROR] Unexpected error: {e}")
+            log_event("error", "UNEXPECTED_ERROR", level="ERROR", error=str(e))
             time.sleep(0.5)
 
     # ============================================================
     # CLEANUP
     # ============================================================
-    print("[SYSTEM] Cleaning up...")
+    log_event("system", "CLEANUP_START", level="INFO")
     cap.release()
     cv2.destroyAllWindows()
+    log_event("system", "ENGINE_STOPPED", level="INFO", reason="cleanup")
     print("[SYSTEM] Engine stopped. Bye!")
 
 
