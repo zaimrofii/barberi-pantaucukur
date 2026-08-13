@@ -4,9 +4,9 @@ import time
 import signal
 import sys
 import redis
-from .detector import BarberDetector
-from .utils import load_config, save_config, draw_roi_event
-from .network import PantauNetwork
+from detector import BarberDetector
+from utils import load_config, save_config, draw_roi_event
+from network import PantauNetwork
 from dotenv import load_dotenv
 
 # ============================================================
@@ -52,8 +52,10 @@ def main():
     # ============================================================
     # CONFIG - Bisa dari env variable
     # ============================================================
-    STREAM_URL = os.environ.get("CAMERA_URL", "http://192.168.1.7:8080/video")
+    STREAM_URL = os.environ.get("CAMERA_URL", "http://192.168.1.155:8080/video")
     SKIP_FRAMES = int(os.environ.get("SKIP_FRAMES", 10))
+    use_scoring = os.environ.get("USE_SCORING", "true").lower() == "true"
+    session_data = {}
 
     # 1. Inisialisasi Data
     print("[SYSTEM] Menginisialisasi konfigurasi kursi...")
@@ -146,13 +148,12 @@ def main():
             # ============================================================
             if frame_count % SKIP_FRAMES == 0:
                 # Gunakan USE_SCORING untuk menentukan apakah session_data dikembalikan
-                use_scoring = os.environ.get("USE_SCORING", "false").lower() == "true"
                 
                 if use_scoring:
                     new_status, last_boxes, session_data = detector.process_ai(frame)
                 else:
-                    new_status, last_boxes = detector.process_ai(frame)
-                    session_data = {}
+                    new_status, last_boxes, session_data = detector.process_ai(frame)
+                    # session_data = {}
 
                 # Sinkronisasi jumlah list
                 while len(last_status) < len(new_status):
@@ -213,15 +214,40 @@ def main():
             # ============================================================
             processed_frame = detector.draw_ui(frame, last_status, last_boxes)
 
+            # --- INFO DASAR ---
+            y_pos = 30
             cv2.putText(
                 processed_frame,
                 f"AI Refresh: 1/{SKIP_FRAMES} frames | Frames: {frame_count}",
-                (10, 30),
+                (10, y_pos),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
+                0.4,
                 (255, 255, 255),
-                2,
+                1,
             )
+
+            # --- TAMPILKAN SCORING REAL-TIME (jika USE_SCORING=true) ---
+            if use_scoring and session_data:
+                y_pos = 60
+                for i, sd in session_data.items():
+                    chair_id = i + 1
+                    score = sd.get('confidence_score', 0)
+                    status = sd.get('session_status', 'IDLE')
+                    breakdown = sd.get('score_breakdown', {})
+                    
+                    text = f"K{chair_id}: {score} | {status} | Posture: {breakdown.get('posture',0)} Hand_Act: {breakdown.get('hand_activity',0)} Temporal: {breakdown.get('temporal',0)} Person_Count: {breakdown.get('person_count',0)}"
+
+                    y_pos += 4
+                    cv2.putText(
+                        processed_frame,
+                        text,
+                        (10, y_pos),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 255) if status == 'ACTIVE' else (255, 255, 255),
+                        1,
+                    )
+                    y_pos += 25
 
             # ============================================================
             # SHOW (Cuma kalau ada GUI)
