@@ -123,7 +123,6 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 CORS_ALLOW_ALL_ORIGINS = True
-
 # settings.py
 
 CHANNEL_LAYERS = {

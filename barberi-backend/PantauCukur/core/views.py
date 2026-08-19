@@ -1,3 +1,4 @@
+# C:\Users\zaimr\projects\barberi-pantaucukur\barberi-backend\PantauCukur\core\views.py
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
@@ -5,7 +6,6 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from .models import BarberSession
 import json
-import cv2
 import base64
 import redis
 from .services.utils import load_config, save_config
@@ -21,12 +21,21 @@ def start_session(request):
             chair_id = data.get("chair_id")
             confidence_score = data.get("confidence_score", 0)
             session_status = data.get("session_status", "PENDING")
+            breakdown = data.get("breakdown", {})  # ← TAMBAHKAN
 
             # 1. Logika Database
+            # Store FULL score_breakdown in tracking_data
+            tracking_data = {
+                "breakdown": breakdown,
+                "initial_score": confidence_score,
+                "initial_status": session_status
+            }
+            
             session = BarberSession.objects.create(
                 chair_number=chair_id,
                 confidence_score=confidence_score,
                 session_status=session_status,
+                tracking_data=tracking_data  # ← TAMBAHKAN
             )
 
             # 2. Logika Real-time (Kirim ke Broker/Redis)
@@ -129,6 +138,8 @@ def update_session(request):
             confidence_score = data.get("confidence_score", 0)
             session_status = data.get("session_status", "PENDING")
             timeout_reason = data.get("timeout_reason", None)
+            trigger_reason = data.get("trigger_reason", None)  # ← TAMBAHKAN
+            breakdown = data.get("breakdown", {})  # ← TAMBAHKAN
 
             # Cari sesi aktif
             session = BarberSession.objects.filter(
@@ -141,6 +152,28 @@ def update_session(request):
                 session.session_status = session_status
                 if timeout_reason:
                     session.timeout_reason = timeout_reason
+                
+                # --- TAMBAHKAN: Append transition to tracking_data ---
+                current_tracking = session.tracking_data or {}
+                if "transitions" not in current_tracking:
+                    current_tracking["transitions"] = []
+                
+                # Ambil from_state dari tracking_data sebelumnya
+                prev_status = current_tracking.get("last_status", "IDLE")
+                
+                transition = {
+                    "timestamp": timezone.now().isoformat(),
+                    "from_state": prev_status,
+                    "to_state": session_status,
+                    "score": confidence_score,
+                    "breakdown": breakdown,
+                    "trigger": trigger_reason or "unknown"
+                }
+                current_tracking["transitions"].append(transition)
+                current_tracking["last_status"] = session_status
+                session.tracking_data = current_tracking
+                # --- END TAMBAHAN ---
+                
                 session.save()
 
                 # Kirim notifikasi real-time
@@ -166,10 +199,17 @@ def update_session(request):
                 )
             else:
                 # Jika tidak ada sesi aktif, buat baru
+                tracking_data = {
+                    "breakdown": breakdown,
+                    "initial_score": confidence_score,
+                    "initial_status": session_status,
+                    "last_status": session_status
+                }
                 session = BarberSession.objects.create(
                     chair_number=chair_id,
                     confidence_score=confidence_score,
                     session_status=session_status,
+                    tracking_data=tracking_data
                 )
                 return JsonResponse(
                     {
@@ -298,3 +338,11 @@ def update_roi(request):
         except Exception as e:
             print(f"[ERROR] update_roi: {e}")
             return JsonResponse({"status": "error", "message": str(e)}, status=400)
+
+# views.py - tambahkan fungsi baru
+def get_session_timeline(request, session_id):
+    session = BarberSession.objects.get(id=session_id)
+    return JsonResponse({
+        "session_id": session.id,
+        "timeline": session.tracking_data.get('transitions', []) if session.tracking_data else []
+    })

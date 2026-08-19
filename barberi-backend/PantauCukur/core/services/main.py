@@ -1,3 +1,4 @@
+# C:\Users\zaimr\projects\barberi-pantaucukur\barberi-backend\PantauCukur\core\services\main.py
 import os
 import cv2
 import time
@@ -8,7 +9,7 @@ from detector import BarberDetector
 from utils import load_config, save_config, draw_roi_event
 from network import PantauNetwork
 from dotenv import load_dotenv
-from logger import log_event, check_redis_connection, set_frame_count
+from logger import log_event, check_redis_connection, set_frame_count, smart_logger
 
 # ============================================================
 # HEADLESS MODE - Matikan GUI kalau di server
@@ -31,7 +32,8 @@ RUNNING = True
 HEARTBEAT_INTERVAL_FRAMES = int(os.environ.get("HEARTBEAT_INTERVAL_FRAMES", "900"))  # 30 detik pada 30fps
 SESSION_UPDATE_INTERVAL = int(os.environ.get("SESSION_UPDATE_INTERVAL", "5"))  # frame
 
-# Konfigurasi logging
+# Konfigurasi logging (INFERENCE_LOG_SAMPLE_RATE dipertahankan untuk kompatibilitas,
+# tetapi SmartLogger menggunakan LOG_SAMPLE_INTERVAL_SECONDS untuk sampling berbasis waktu)
 INFERENCE_LOG_SAMPLE_RATE = int(os.environ.get("INFERENCE_LOG_SAMPLE_RATE", "50"))
 
 def signal_handler(sig, frame):
@@ -106,7 +108,7 @@ def main():
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     if not cap.isOpened():
-        log_event("error", "CAMERA_OPEN_FAILED", level="ERROR", stream_url=STREAM_URL)
+        log_event("system", "CAMERA_OPEN_FAILED", level="ERROR", stream_url=STREAM_URL)
         return
 
     log_event("system", "ENGINE_RUNNING", level="INFO",
@@ -130,13 +132,13 @@ def main():
             # ============================================================
             if not ret:
                 reconnect_attempts += 1
-                log_event("warning", "FRAME_DROP", level="WARNING",
+                log_event("system", "FRAME_DROP", level="WARNING",
                           reconnect_attempts=reconnect_attempts,
                           frame_count=frame_count,
                           stream_url=STREAM_URL)
 
                 if reconnect_attempts >= max_reconnect_attempts:
-                    log_event("error", "MAX_RECONNECT_ATTEMPTS", level="ERROR",
+                    log_event("system", "MAX_RECONNECT_ATTEMPTS", level="ERROR",
                               attempts=reconnect_attempts)
                     cap.release()
                     time.sleep(1)
@@ -182,14 +184,17 @@ def main():
                     last_status.append(False)
 
                 # ============================================================
-                # INFERENCE COMPLETE EVENT (sampling)
+                # INFERENCE COMPLETE EVENT (sampling berbasis waktu via SmartLogger)
                 # ============================================================
-                if frame_count % INFERENCE_LOG_SAMPLE_RATE == 0:
-                    person_count_delta = len(new_status) - last_person_count
-                    log_event("system", "INFERENCE_COMPLETE", level="INFO",
-                              inference_time_ms=round(inference_time_ms, 2),
-                              person_count_delta=person_count_delta)
-                    last_person_count = len(new_status)
+                person_count_delta = len(new_status) - last_person_count
+                smart_logger.log_if_needed(
+                    component_key="system",
+                    event="INFERENCE_COMPLETE",
+                    level="INFO",
+                    inference_time_ms=round(inference_time_ms, 2),
+                    person_count_delta=person_count_delta
+                )
+                last_person_count = len(new_status)
 
                 # ============================================================
                 # NETWORK & STATE MONITORING - Kirim perubahan ke Django
@@ -200,14 +205,14 @@ def main():
                     # 1. Kirim status occupancy (binary) jika berubah
                     if i < len(last_status) and new_status[i] != last_status[i]:
                         status_str = "TERISI" if new_status[i] else "KOSONG"
-                        log_event("event", "STATUS_CHANGE", level="INFO",
+                        log_event("system", "STATUS_CHANGE", level="INFO",
                                   chair_id=chair_id,
                                   status=status_str)
 
                         # Kirim ke Django (binary occupancy)
                         success = network.report_status_change(chair_id, new_status[i])
                         if not success:
-                            log_event("warning", "STATUS_SEND_FAILED", level="WARNING",
+                            log_event("system", "STATUS_SEND_FAILED", level="WARNING",
                                       chair_id=chair_id)
 
                         # Update memori
@@ -217,7 +222,7 @@ def main():
                     if use_scoring and session_data and i in session_data:
                         sd = session_data[i]
                         if sd.get('status_changed', False):
-                            log_event("event", "STATE_MACHINE_CHANGE", level="INFO",
+                            log_event("system", "STATE_MACHINE_CHANGE", level="INFO",
                                       chair_id=chair_id,
                                       session_status=sd['session_status'],
                                       confidence_score=sd['confidence_score'])
@@ -230,7 +235,7 @@ def main():
                                 session_status=sd['session_status']
                             )
                             if not success:
-                                log_event("warning", "SESSION_UPDATE_FAILED", level="WARNING",
+                                log_event("system", "SESSION_UPDATE_FAILED", level="WARNING",
                                           chair_id=chair_id)
                         
                         # Simpan session_data terakhir untuk heartbeat
@@ -315,7 +320,7 @@ def main():
                     RUNNING = False
                     break
                 elif key == ord("c"):
-                    log_event("action", "ROI_RESET", level="INFO")
+                    log_event("system", "ROI_RESET", level="INFO")
                     CHAIR_CONFIG.clear()
                     last_status.clear()
                     detector.update_rois(CHAIR_CONFIG)
@@ -328,7 +333,9 @@ def main():
                               frame_count=frame_count)
 
         except Exception as e:
-            log_event("error", "UNEXPECTED_ERROR", level="ERROR", error=str(e))
+            import traceback
+            tb_str = traceback.format_exc()
+            log_event("system", "UNEXPECTED_ERROR", level="ERROR", error=str(e), traceback=tb_str)
             time.sleep(0.5)
 
     # ============================================================

@@ -1,18 +1,118 @@
-        # detector.py
+# C:\Users\zaimr\projects\barberi-pantaucukur\barberi-backend\PantauCukur\core\services\detector.py
 import cv2
 import os
 import numpy as np
+import time  # ← TAMBAHKAN
 from ultralytics import YOLO
-from boxmot import ByteTrack
+# from boxmot import ByteTrack  # ← HAPUS
 from dotenv import load_dotenv
 
-from .state_machine import StateMachine
-from .scoring_engine import ScoringEngine
-from .posture_classifier import PostureClassifier
-from .hand_activity import calculate_hand_activity
-from .track_manager import TrackManager
-from .roi_manager import ROIManager
-from .utils import match_keypoints_to_tracked
+from state_machine import StateMachine
+from scoring_engine import ScoringEngine
+from posture_classifier import PostureClassifier
+from hand_activity import calculate_hand_activity
+from track_manager import TrackManager
+from roi_manager import ROIManager
+from utils import match_keypoints_to_tracked
+from logger import smart_logger
+
+
+# ==================== SIMPLE TRACKER (TAMBAHKAN) ====================
+class SimpleByteTrack:
+    """Simple tracker replacement for ByteTrack"""
+    def __init__(self, track_thresh=0.5, match_thresh=0.4, frame_rate=30):
+        self.track_thresh = track_thresh
+        self.match_thresh = match_thresh
+        self.frame_rate = frame_rate
+        self.tracks = {}
+        self.next_id = 0
+        self.max_age = 30
+        self.min_hits = 3
+        self.grace_period = 5  # Frame grace untuk track baru sebelum dievaluasi hits
+        
+    def update(self, boxes):
+        detections = []
+        for box in boxes:
+            detections.append({
+                'box': box,
+                'centroid': ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+            })
+        
+        for track_id in list(self.tracks.keys()):
+            self.tracks[track_id]['age'] += 1
+            
+        matched = set()
+        for i, det in enumerate(detections):
+            best_iou = 0
+            best_id = None
+            
+            for track_id, track in self.tracks.items():
+                if track_id in matched:
+                    continue
+                iou = self._calculate_iou(track['box'], det['box'])
+                if iou > self.match_thresh and iou > best_iou:
+                    best_iou = iou
+                    best_id = track_id
+            
+            if best_id is not None:
+                self.tracks[best_id]['box'] = det['box']
+                self.tracks[best_id]['age'] = 0
+                self.tracks[best_id]['hits'] += 1
+                matched.add(best_id)
+            else:
+                self.tracks[self.next_id] = {
+                    'box': det['box'],
+                    'age': 0,
+                    'hits': 1,
+                    'track_id': self.next_id
+                }
+                self.next_id += 1
+        
+        to_remove = []
+        for track_id, track in self.tracks.items():
+            # Hapus track yang terlalu lama tidak terlihat (timeout)
+            if track['age'] > self.max_age:
+                to_remove.append(track_id)
+                continue
+            
+            # PERBAIKAN BUG: Grace period untuk track baru.
+            # Track baru dibuat dengan hits=1. Jika langsung dihapus karena
+            # hits < min_hits, SEMUA track akan hilang setiap frame (BUG).
+            # Track hanya dihapus jika sudah melewati grace_period namun hits-nya
+            # masih di bawah min_hits (artinya jarang terdeteksi/matching gagal).
+            if track['age'] > self.grace_period and track['hits'] < self.min_hits:
+                to_remove.append(track_id)
+        
+        for track_id in to_remove:
+            del self.tracks[track_id]
+        
+        return [TrackObject(track) for track in self.tracks.values()]
+    
+    def _calculate_iou(self, box1, box2):
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+        
+        intersection = (x2 - x1) * (y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = area1 + area2 - intersection
+        
+        return intersection / union if union > 0 else 0.0
+
+
+class TrackObject:
+    """Mock BoxMot track object"""
+    def __init__(self, track_data):
+        self.track_id = track_data['track_id']
+        self.xyxy = track_data['box']
+        self.confidence = 1.0
+        self.age = track_data['age']
+# ================================================================
 
 
 class BarberDetector:
@@ -20,7 +120,10 @@ class BarberDetector:
         print("Sistem AI: Memuat model...")
         self.model = YOLO(model_path)
         self.conf_threshold = 0.5
-        self.tracker = ByteTrack()
+        
+        # GANTI dengan SimpleByteTrack
+        # self.tracker = ByteTrack()  # ← COMMENT
+        self.tracker = SimpleByteTrack()  # ← GANTI
         
         # Load config
         load_dotenv()
@@ -36,7 +139,7 @@ class BarberDetector:
         self.frame_count = 0
         self.rois = rois if rois else []
         
-        print("Sistem AI: Model siap dengan YOLO-Pose, ByteTrack, dan Scoring Engine.")
+        print("Sistem AI: Model siap dengan YOLO-Pose, SimpleTracker, dan Scoring Engine.")
     
     def update_rois(self, new_rois):
         self.rois = new_rois
@@ -50,6 +153,7 @@ class BarberDetector:
             tuple: (stable_status, person_boxes, session_data) jika USE_SCORING=True
                 (stable_status, person_boxes) jika USE_SCORING=False
         """
+        start_time = time.time()  # ← TAMBAHKAN untuk processing time
         self.frame_count += 1
         
         # --- Deteksi YOLO (dengan keypoints) ---
@@ -85,8 +189,10 @@ class BarberDetector:
             hand_activity_func=calculate_hand_activity,
             current_frame=self.frame_count
         )
-        
-        # --- Identify barber for each chair ---
+
+        # --------------------------------------
+        # --- IDENTIFY BARBER FOR EACH CHAIR ---
+        # --------------------------------------
         for chair_id in range(len(self.rois)):
             barber_tid = self.track_manager.identify_barber_for_chair(
                 chair_id, self.rois, tracked_objects
@@ -123,17 +229,31 @@ class BarberDetector:
                     duration = self.frame_count  # frame yang diproses
                     
                     # Hitung skor via ScoringEngine
+                    # PERBAIKAN BUG: `tracked_objects` diteruskan agar
+                    # `identify_barber_for_chair()` dapat bekerja dengan benar.
                     score, breakdown = self.scoring_engine.calculate(
                         chair_id=chair_id,
                         track_manager=self.track_manager,
                         rois=self.rois,
-                        duration=duration
+                        duration=duration,
+                        tracked_objects=tracked_objects
                     )
                     
                     # Perbarui mesin status
+                    # PERBAIKAN BUG: `person_count` sebelumnya hanya menghitung orang
+                    # DI DALAM ROI (via `count_persons_in_roi`). Karena barber berdiri
+                    # di luar/dekat ROI, person_count selalu 1, sehingga transisi
+                    # IDLE → PENDING (butuh person_count >= 2) tidak pernah terjadi.
+                    # Sekarang kita hitung: 1 (customer di ROI) + 1 (barber teridentifikasi)
                     person_count = self.roi_manager.count_persons_in_roi(person_boxes, chair_id)
-                    new_state, status_changed = self.state_machine.update(
-                        chair_id, score, person_count, duration
+                    barber_tid = self.track_manager.identify_barber_for_chair(
+                        chair_id, self.rois, tracked_objects
+                    )
+                    if barber_tid is not None:
+                        person_count += 1  # Tambahkan barber yang berdiri
+                    
+                    new_state, status_changed, timeout_occurred, trigger_reason = self.state_machine.update(
+                        chair_id, score, person_count, duration, breakdown
                     )
                     
                     # Bangun data sesi
@@ -152,10 +272,28 @@ class BarberDetector:
                         'person_count': person_count
                     }
         
+        # --- LOGGING DETECTION_COMPLETE (sampling berbasis waktu via SmartLogger) ---
+        processing_time_ms = (time.time() - start_time) * 1000
+        chair_status = {}
+        for i, status in enumerate(stable_status):
+            chair_status[f"chair_{i+1}"] = "occupied" if status else "empty"
+        
+        tracked_ids = [obj.track_id for obj in tracked_objects]
+        
+        smart_logger.log_if_needed(
+            component_key="detector",
+            event="DETECTION_COMPLETE",
+            level="DEBUG",
+            total_persons_detected=len(person_boxes),
+            tracked_ids=tracked_ids,
+            chair_status=chair_status,
+            processing_time_ms=round(processing_time_ms, 2)
+        )
+        
         if self.use_scoring:
             return stable_status, person_boxes, session_data
         else:
-            return stable_status, person_boxes
+            return stable_status, person_boxes, {} 
     
     def draw_ui(self, frame, occupancy_status, person_boxes, session_data=None):
         """Fungsi khusus untuk menggambar kotak di SETIAP frame"""

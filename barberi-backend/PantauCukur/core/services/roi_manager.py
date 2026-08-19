@@ -1,3 +1,4 @@
+# C:\Users\zaimr\projects\barberi-pantaucukur\barberi-backend\PantauCukur\core\services\roi_manager.py
 class ROIManager:
     """ROI and occupancy management logic."""
     

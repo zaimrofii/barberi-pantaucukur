@@ -1,3 +1,4 @@
+# C:\Users\zaimr\projects\barberi-pantaucukur\barberi-backend\PantauCukur\core\models.py
 from django.db import models
 
 

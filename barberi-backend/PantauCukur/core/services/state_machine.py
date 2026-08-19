@@ -1,19 +1,22 @@
+# C:\Users\zaimr\projects\barberi-pantaucukur\barberi-backend\PantauCukur\core\services\state_machine.py
 import os
 import time
 import numpy as np
 from dotenv import load_dotenv
+from logger import log_event  # ← TAMBAHKAN
 
 class StateMachine:
     """Mesin status untuk manajemen siklus sesi."""
     
     def __init__(self):
-        self.states = {}      # chair_id -> status saat ini
-        self.timers = {}      # chair_id -> timer (detik dalam status saat ini)
-        self.scores = {}      # chair_id -> daftar skor terbaru untuk jendela konfirmasi
-        self.pending_start = {}  # chair_id -> timestamp saat PENDING dimulai
-        self.last_update = {}  # chair_id -> waktu update terakhir (time.time())
+        self.states = {}
+        self.timers = {}
+        self.scores = {}
+        self.pending_start = {}
+        self.last_update = {}
+        self.last_score = {}  # ← TAMBAHKAN untuk breakdown saat log
+        self.last_breakdown = {}  # ← TAMBAHKAN
         
-        # Muat konfigurasi
         load_dotenv()
         self.pending_duration = int(os.environ.get('PENDING_DURATION', '30'))
         self.scoring_threshold = int(os.environ.get('SCORING_THRESHOLD', '70'))
@@ -23,11 +26,11 @@ class StateMachine:
         self.session_timeout_seconds = int(os.environ.get('SESSION_TIMEOUT_SECONDS', '300'))
         self.session_timeout_action = os.environ.get('SESSION_TIMEOUT_ACTION', 'auto_end')
     
-    def update(self, chair_id, score, person_count, duration):
+    def update(self, chair_id, score, person_count, duration, breakdown=None):
         """Perbarui mesin status untuk kursi tertentu.
         
         Returns:
-            tuple: (status_baru, status_berubah, timeout_terjadi)
+            tuple: (status_baru, status_berubah, timeout_terjadi, trigger_reason)
         """
         if chair_id not in self.states:
             self.states[chair_id] = 'IDLE'
@@ -35,63 +38,78 @@ class StateMachine:
             self.scores[chair_id] = []
             self.pending_start[chair_id] = None
             self.last_update[chair_id] = time.time()
+            self.last_score[chair_id] = 0
+            self.last_breakdown[chair_id] = {}
         
-        # Update last update time
         self.last_update[chair_id] = time.time()
         
         current_state = self.states[chair_id]
         new_state = current_state
         status_changed = False
         timeout_occurred = False
+        trigger_reason = None
         
-        # Perbarui timer
-        self.timers[chair_id] += 1  # asumsikan dipanggil setiap detik
+        self.timers[chair_id] += 1
         
-        # Simpan skor terbaru untuk jendela konfirmasi
         self.scores[chair_id].append(score)
         if len(self.scores[chair_id]) > self.confirmation_window:
             self.scores[chair_id].pop(0)
         
-        # Hitung skor rata-rata selama jendela konfirmasi
         avg_score = np.mean(self.scores[chair_id]) if self.scores[chair_id] else 0
         
-        # Transisi status
+        # --- TRANSISI STATUS ---
         if current_state == 'IDLE':
-            # Transisi ke PENDING ketika 2 orang hadir selama pending_duration
             if person_count >= 2 and duration >= self.pending_duration:
                 new_state = 'PENDING'
                 self.pending_start[chair_id] = duration
                 status_changed = True
+                trigger_reason = "two_persons_detected"
         
         elif current_state == 'PENDING':
-            # Transisi ke ACTIVE ketika skor >= threshold
             if avg_score >= self.scoring_threshold:
                 new_state = 'ACTIVE'
                 status_changed = True
-            # Kembali ke IDLE jika jumlah orang turun di bawah 2
+                trigger_reason = "score_threshold_met"
             elif person_count < 2:
                 new_state = 'IDLE'
                 status_changed = True
+                trigger_reason = "person_count_below_two"
         
         elif current_state == 'ACTIVE':
-            # Transisi ke ENDING ketika skor turun di bawah threshold selama confirmation_window
             if avg_score < self.scoring_threshold and len(self.scores[chair_id]) >= self.confirmation_window:
                 new_state = 'ENDING'
                 status_changed = True
+                trigger_reason = "score_below_threshold"
         
         elif current_state == 'ENDING':
-            # Setelah cooldown, kembali ke IDLE
             if self.timers[chair_id] >= self.cooldown_seconds:
                 new_state = 'IDLE'
                 status_changed = True
+                trigger_reason = "cooldown_complete"
         
-        # Perbarui status
+        # --- LOGGING HANYA SAAT STATUS BERUBAH ---
+        if status_changed:
+            log_event(
+                component="state_machine",
+                event="STATE_TRANSITION",
+                level="INFO",
+                chair_id=chair_id,
+                from_state=current_state,
+                to_state=new_state,
+                trigger_reason=trigger_reason,
+                score=score,
+                breakdown=breakdown or self.last_breakdown.get(chair_id, {}),
+                duration_in_state=self.timers[chair_id]
+            )
+            self.last_breakdown[chair_id] = breakdown or {}
+        
         if new_state != current_state:
             self.states[chair_id] = new_state
             self.timers[chair_id] = 0
             self.scores[chair_id] = []
         
-        return new_state, status_changed, timeout_occurred
+        return new_state, status_changed, timeout_occurred, trigger_reason
+    
     
     def check_timeout(self, chair_id):
         """Check if session has been active too long without updates.
